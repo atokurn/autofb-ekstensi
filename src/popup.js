@@ -3,6 +3,9 @@
 (function () {
   const statusBadge = document.getElementById("statusBadge");
   const wrongPageBox = document.getElementById("wrongPageBox");
+  const displayModeCard = document.getElementById("displayModeCard");
+  const displayModeSelect = document.getElementById("displayModeSelect");
+  const openSidePanelBtn = document.getElementById("openSidePanelBtn");
   const composerInfoBox = document.getElementById("composerInfoBox");
   const compRowCountText = document.getElementById("compRowCountText");
   const compDoneText = document.getElementById("compDoneText");
@@ -21,6 +24,7 @@
   const togglePanelBtn = document.getElementById("togglePanelBtn");
 
   let activeTabId = null;
+  let activeWindowId = null;
 
   function statusLabel(status) {
     const map = {
@@ -36,6 +40,11 @@
 
   function render(res) {
     if (!res) return;
+
+    displayModeCard.classList.remove("hidden");
+    if (document.activeElement !== displayModeSelect && res.displayMode) {
+      displayModeSelect.value = res.displayMode;
+    }
 
     if (res.activeTab === "composer" && res.composerSnapshot) {
       composerInfoBox.classList.remove("hidden");
@@ -92,6 +101,7 @@
     chrome.tabs.sendMessage(activeTabId, payload, (res) => {
       if (chrome.runtime.lastError) {
         wrongPageBox.classList.remove("hidden");
+        displayModeCard.classList.add("hidden");
         mainBox.classList.add("hidden");
         composerInfoBox.classList.add("hidden");
         return;
@@ -123,13 +133,31 @@
     const tab = tabs && tabs[0];
     if (!tab || !tab.url || !tab.url.startsWith("https://business.facebook.com/")) {
       wrongPageBox.classList.remove("hidden");
+      displayModeCard.classList.add("hidden");
       mainBox.classList.add("hidden");
       composerInfoBox.classList.add("hidden");
       return;
     }
     activeTabId = tab.id;
+    activeWindowId = tab.windowId;
     refresh();
     setInterval(refresh, 1000);
+  });
+
+  if (!chrome.sidePanel || typeof chrome.sidePanel.open !== "function") {
+    openSidePanelBtn.classList.add("hidden");
+  }
+
+  displayModeSelect.addEventListener("change", () => {
+    sendToTab({ type: "SET_DISPLAY_MODE", displayMode: displayModeSelect.value }, refresh);
+  });
+
+  openSidePanelBtn.addEventListener("click", () => {
+    if (chrome.sidePanel && typeof chrome.sidePanel.open === "function" && activeWindowId) {
+      chrome.sidePanel.open({ windowId: activeWindowId })
+        .then(() => window.close())
+        .catch(() => {});
+    }
   });
 
   openMetaBtn.addEventListener("click", () => {

@@ -18,6 +18,7 @@
     const onUpdate = (deps && deps.onUpdate) || function () {};
     const sleepImpl = (deps && deps.sleep) || ((ms) => new Promise((r) => setTimeout(r, ms)));
     const nowImpl = (deps && deps.now) || (() => Date.now());
+    const emptyWaitMs = (deps && typeof deps.emptyWaitMs === "number") ? deps.emptyWaitMs : 8500;
 
     let config = Object.assign({}, DEFAULT_CONFIG);
     let state = {
@@ -210,8 +211,44 @@
       }
     }
 
+    async function waitForAvailableContext(token, minRowsRequired) {
+      let ctx = dom.findContentContext(doc);
+      if (ctx.rows.length >= minRowsRequired) {
+        return ctx;
+      }
+
+      const start = nowImpl();
+      let loggedWait = false;
+      let nudged = false;
+
+      while (nowImpl() - start < emptyWaitMs) {
+        if (!(await waitWhilePaused(token))) return null;
+        const elapsed = nowImpl() - start;
+
+        if (!loggedWait && elapsed >= 1200) {
+          loggedWait = true;
+          addLog("Menunggu daftar konten selesai dimuat...", "info");
+        }
+        if (!nudged && elapsed >= 3000 && typeof dom.nudgeScrollToLoadMore === "function") {
+          nudged = true;
+          dom.nudgeScrollToLoadMore(doc);
+        }
+
+        await sleepImpl(250);
+        if (isAborted(token)) return null;
+
+        ctx = dom.findContentContext(doc);
+        if (ctx.rows.length >= minRowsRequired) {
+          return ctx;
+        }
+      }
+
+      return ctx;
+    }
+
     async function runBulkIteration(token, customKws) {
-      const ctx = dom.findContentContext(doc);
+      const ctx = await waitForAvailableContext(token, 1);
+      if (!ctx) return { aborted: true };
       if (ctx.rows.length === 0) {
         return { done: true, reason: "Tidak ada konten yang tersisa." };
       }
@@ -304,6 +341,21 @@
       return { ok: true, removed };
     }
 
+    function dismissOpenMenus(moreBtn) {
+      try {
+        if (doc && typeof KeyboardEvent === "function") {
+          const evt = new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true });
+          doc.dispatchEvent(evt);
+          if (doc.body) doc.body.dispatchEvent(evt);
+        }
+      } catch (_err) {
+        // ignore
+      }
+      if (typeof dom.findOpenMenus === "function" && dom.findOpenMenus(doc).length > 0 && moreBtn) {
+        dom.clickElement(moreBtn);
+      }
+    }
+
     async function deleteSingleViaMenu(row, customKws, token) {
       const moreBtn = dom.findRowMoreButton(row.rowEl, doc);
       if (!moreBtn) {
@@ -311,16 +363,14 @@
       }
 
       dom.clickElement(moreBtn);
-      const menuItem = await waitFor(() => dom.findDeleteMenuItem(doc, customKws), 3500, 120, token);
+      // Wait for menu container to open first, then look for delete item briefly
+      if (typeof dom.findOpenMenus === "function") {
+        await waitFor(() => dom.findOpenMenus(doc).length > 0, 1500, 100, token);
+      }
+      const menuItem = await waitFor(() => dom.findDeleteMenuItem(doc, customKws), 600, 100, token);
       if (!menuItem) {
-        // Close open popover menu so fallback or next step is unblocked
-        try {
-          if (doc && typeof KeyboardEvent === "function") {
-            doc.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
-          }
-        } catch (_err) {
-          // ignore
-        }
+        dismissOpenMenus(moreBtn);
+        await smartSleep(180, token);
         return { ok: false, reason: "Opsi 'Hapus' di menu (...) tidak ditemukan." };
       }
 
@@ -338,7 +388,7 @@
         if (!(await smartSleep(config.stepDelayMs, token))) return { aborted: true };
       }
 
-      const bulkBtn = await waitFor(() => dom.findBulkDeleteButton(doc, customKws), 3500, 150, token);
+      const bulkBtn = await waitFor(() => dom.findBulkDeleteButton(doc, customKws), 4000, 150, token);
       if (!bulkBtn) {
         return { ok: false, reason: "Tombol 'Hapus' di toolbar tidak muncul untuk baris ini." };
       }
@@ -348,13 +398,20 @@
       return await handleConfirmationDialog(token, customKws);
     }
 
-    async function runSingleIteration(token, customKws, skipOffset) {
-      const ctx = dom.findContentContext(doc);
+    async function runSingleIteration(token, customKws, skipOffset, autoHint) {
+      const ctx = await waitForAvailableContext(token, 1);
+      if (!ctx) return { aborted: true };
       if (ctx.rows.length === 0) {
         return { done: true, reason: "Tidak ada konten yang tersisa." };
       }
       if (skipOffset >= ctx.rows.length) {
-        return { done: true, reason: "Semua konten yang dapat dihapus sudah diproses." };
+        // Wait briefly in case more rows are lazy-loading below skipped rows
+        const extraCtx = await waitForAvailableContext(token, skipOffset + 1);
+        if (!extraCtx) return { aborted: true };
+        if (skipOffset >= extraCtx.rows.length) {
+          return { done: true, reason: "Semua konten yang dapat dihapus sudah diproses." };
+        }
+        ctx.rows = extraCtx.rows;
       }
 
       const targetRow = ctx.rows[skipOffset];
@@ -369,22 +426,42 @@
         res = await deleteSingleViaMenu(targetRow, customKws, token);
       } else if (config.singleMethod === "checkbox") {
         res = await deleteSingleViaCheckbox(targetRow, customKws, token);
+      } else if (autoHint && autoHint.preferCheckbox) {
+        res = await deleteSingleViaCheckbox(targetRow, customKws, token);
+        if (!res.ok && !res.aborted) {
+          res = await deleteSingleViaMenu(targetRow, customKws, token);
+        }
       } else {
         // "auto": try menu (...) first, fallback to checkbox
         res = await deleteSingleViaMenu(targetRow, customKws, token);
         if (!res.ok && !res.aborted) {
           addLog(`Menu (...) tidak tersedia (${res.reason}), mencoba via checkbox...`, "warn");
-          // Dismiss any leftover open menu if needed by clicking checkbox cleanly
           res = await deleteSingleViaCheckbox(targetRow, customKws, token);
+          if (res.ok && autoHint) {
+            autoHint.menuMisses += 1;
+            if (autoHint.menuMisses >= 2 && !autoHint.preferCheckbox) {
+              autoHint.preferCheckbox = true;
+              addLog("Beralih otomatis ke mode checkbox langsung agar lebih cepat & stabil.", "info");
+            }
+          }
+        } else if (res.ok && autoHint) {
+          autoHint.menuMisses = 0;
         }
       }
 
       if (res.aborted) return { aborted: true };
       if (!res.ok) return { ok: false, reason: res.reason, title: targetRow.title };
 
-      // Verify top/target row disappeared
+      // Verify top/target row disappeared (avoid false positive on transient empty skeleton if >1 rows existed)
+      let emptySeenAt = 0;
       const confirmedRemoved = await waitFor(() => {
         const afterCtx = dom.findContentContext(doc);
+        if (afterCtx.rows.length === 0) {
+          if (beforeSigs.length <= 1) return true;
+          if (!emptySeenAt) emptySeenAt = nowImpl();
+          return nowImpl() - emptySeenAt >= 1500;
+        }
+        emptySeenAt = 0;
         if (afterCtx.rows.length < beforeSigs.length) return true;
         const rowNow = afterCtx.rows[skipOffset];
         if (!rowNow || rowNow.signature !== targetBeforeSig) return true;
@@ -432,6 +509,7 @@
 
       const customKws = getCustomKeywords();
       let skipOffset = 0;
+      const autoHint = { menuMisses: 0, preferCheckbox: false };
 
       try {
         while (!isAborted(token)) {
@@ -464,7 +542,7 @@
               return;
             }
           } else {
-            const res = await runSingleIteration(token, customKws, skipOffset);
+            const res = await runSingleIteration(token, customKws, skipOffset, autoHint);
             if (res.aborted || isAborted(token)) break;
             if (res.done) {
               state.status = "completed";

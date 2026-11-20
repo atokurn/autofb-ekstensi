@@ -564,3 +564,52 @@ test("Engine supports pause, resume, and stop cleanly", async () => {
   assert.equal(snap.deletedCount, 1);
   assert.equal(rowRefs.length, 2);
 });
+
+test("1-by-1 mode does not stop prematurely when Meta transiently hides/disables rows after 2 deletions", async () => {
+  const { doc, rowRefs } = createMetaPageSim([
+    { title: "Video 1", noMenuDelete: true },
+    { title: "Video 2", noMenuDelete: true },
+    { title: "Video 3", noMenuDelete: true },
+    { title: "Video 4", noMenuDelete: true }
+  ]);
+
+  const clock = createTestClock();
+  let transientCallsLeft = 0;
+  let prevLen = rowRefs.length;
+
+  // Wrap findContentContext to simulate a 2-second loading/skeleton gap right after item #2 is deleted
+  const wrappedDom = Object.assign({}, dom, {
+    findContentContext(documentRef) {
+      const real = dom.findContentContext(documentRef);
+      if (real.rows.length === 2 && prevLen === 3 && transientCallsLeft === 0) {
+        transientCallsLeft = 6; // 6 * 250ms = 1.5s transient empty/loading state
+      }
+      prevLen = real.rows.length;
+      if (transientCallsLeft > 0) {
+        transientCallsLeft -= 1;
+        return { masterCheckbox: real.masterCheckbox, rows: [] };
+      }
+      return real;
+    }
+  });
+
+  const eng = engineFactory.createEngine({
+    document: doc,
+    dom: wrappedDom,
+    sleep: clock.sleep,
+    now: clock.now,
+    emptyWaitMs: 5000
+  });
+
+  await eng.start({
+    mode: "single",
+    singleMethod: "auto",
+    delayMs: 300,
+    stepDelayMs: 150
+  });
+
+  const snap = eng.getSnapshot();
+  assert.equal(snap.status, "completed");
+  assert.equal(snap.deletedCount, 4);
+  assert.equal(rowRefs.length, 0);
+});

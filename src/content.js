@@ -27,7 +27,12 @@
 
   let uiPrefs = {
     panelOpen: true,
-    activeTab: detectDefaultTab() // "composer" | "delete"
+    activeTab: detectDefaultTab(), // "composer" | "delete"
+    displayMode: "floating", // "floating" | "sidebar"
+    pushPage: true,
+    settingsOpen: false,
+    floatingRight: 18,
+    floatingBottom: 18
   };
 
   function getSavedState(key, cb) {
@@ -88,6 +93,8 @@
   let shadow = null;
   let els = {};
 
+  const SIDEBAR_WIDTH = 376;
+
   function buildStyles() {
     return `
       :host {
@@ -98,6 +105,21 @@
         z-index: 2147483646;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         color: #111827;
+      }
+
+      :host(.sidebar-mode) {
+        top: 0 !important;
+        right: 0 !important;
+        bottom: 0 !important;
+        left: auto !important;
+        height: 100vh;
+      }
+
+      :host(.sidebar-mode.collapsed) {
+        top: 50% !important;
+        bottom: auto !important;
+        height: auto;
+        transform: translateY(-50%);
       }
 
       * { box-sizing: border-box; }
@@ -115,6 +137,12 @@
         font-weight: 600;
         cursor: pointer;
         box-shadow: 0 10px 25px rgba(15, 23, 42, 0.28);
+      }
+
+      .pill-btn.sidebar-mode {
+        border-radius: 12px 0 0 12px;
+        padding: 12px 10px;
+        border-right: none;
       }
 
       .pill-dot {
@@ -146,22 +174,42 @@
         overflow: hidden;
       }
 
+      .panel.sidebar-mode {
+        width: ${SIDEBAR_WIDTH}px;
+        max-width: 100vw;
+        height: 100vh;
+        max-height: 100vh;
+        border-radius: 0;
+        border-top: none;
+        border-bottom: none;
+        border-right: none;
+        border-left: 1px solid #CBD5E1;
+        box-shadow: -8px 0 28px rgba(15, 23, 42, 0.14);
+      }
+
       .header {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 10px 14px;
+        padding: 10px 12px;
         background: linear-gradient(135deg, #1877F2 0%, #125AC4 100%);
         color: #FFFFFF;
         cursor: grab;
         user-select: none;
       }
+      .panel.sidebar-mode .header { cursor: default; }
       .header:active { cursor: grabbing; }
+      .panel.sidebar-mode .header:active { cursor: default; }
 
       .header-left {
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 7px;
+      }
+      .header-actions {
+        display: flex;
+        align-items: center;
+        gap: 5px;
       }
       .title { font-size: 13px; font-weight: 700; }
 
@@ -187,12 +235,53 @@
         height: 24px;
         border-radius: 6px;
         cursor: pointer;
-        font-size: 14px;
+        font-size: 13px;
         display: inline-flex;
         align-items: center;
         justify-content: center;
       }
       .icon-btn:hover { background: rgba(255, 255, 255, 0.28); }
+      .icon-btn.active { background: rgba(255, 255, 255, 0.36); }
+
+      .settings-drawer {
+        background: #F8FAFC;
+        border-bottom: 1px solid #E2E8F0;
+        padding: 9px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
+      }
+      .seg-group {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 5px;
+      }
+      .seg-btn {
+        border: 1.5px solid #CBD5E1;
+        background: #FFFFFF;
+        border-radius: 7px;
+        padding: 6px 8px;
+        font-size: 11.5px;
+        font-weight: 700;
+        color: #334155;
+        cursor: pointer;
+      }
+      .seg-btn.active {
+        border-color: #1877F2;
+        background: #EFF6FF;
+        color: #1D4ED8;
+      }
+      .btn-mini {
+        border: 1px solid #BFDBFE;
+        background: #EFF6FF;
+        color: #1D4ED8;
+        border-radius: 6px;
+        padding: 5px 8px;
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .btn-mini:hover { background: #DBEAFE; }
 
       .top-tabs {
         display: grid;
@@ -470,7 +559,25 @@
             <span class="title">Meta Auto Manager</span>
             <span class="badge" id="statusBadge">Siap</span>
           </div>
-          <button type="button" class="icon-btn" id="minimizeBtn" title="Kecilkan panel">—</button>
+          <div class="header-actions">
+            <button type="button" class="icon-btn" id="toggleLayoutBtn" title="Pindah ke Sidebar / Mengambang">&#9707;</button>
+            <button type="button" class="icon-btn" id="settingsBtn" title="Pengaturan tampilan">&#9881;</button>
+            <button type="button" class="icon-btn" id="minimizeBtn" title="Kecilkan panel">&#8212;</button>
+          </div>
+        </div>
+
+        <div class="settings-drawer hidden" id="settingsDrawer">
+          <div class="section-label">Mode Tampilan</div>
+          <div class="seg-group">
+            <button type="button" class="seg-btn active" id="viewFloatingBtn">Mengambang</button>
+            <button type="button" class="seg-btn" id="viewSidebarBtn">Sidebar Kanan</button>
+          </div>
+          <label class="check-row hidden" id="pushPageRow" style="font-weight:500;">
+            <input type="checkbox" id="pushPageCheck" checked />
+            <span>Geser halaman agar tidak tertutup</span>
+          </label>
+          <button type="button" class="btn-mini" id="openBrowserSidePanelBtn">Buka di Side Panel Browser</button>
+          <div class="hint hidden" id="sidePanelNotice"></div>
         </div>
 
         <div class="top-tabs">
@@ -768,7 +875,7 @@
       </div>
     `;
     shadow.appendChild(container);
-    (document.body || document.documentElement).appendChild(hostEl);
+    (document.documentElement || document.body).appendChild(hostEl);
 
     const id = (s) => shadow.getElementById(s);
     els = {
@@ -777,7 +884,16 @@
       pillLabel: id("pillLabel"),
       panel: id("panel"),
       dragHandle: id("dragHandle"),
+      toggleLayoutBtn: id("toggleLayoutBtn"),
+      settingsBtn: id("settingsBtn"),
       minimizeBtn: id("minimizeBtn"),
+      settingsDrawer: id("settingsDrawer"),
+      viewFloatingBtn: id("viewFloatingBtn"),
+      viewSidebarBtn: id("viewSidebarBtn"),
+      pushPageRow: id("pushPageRow"),
+      pushPageCheck: id("pushPageCheck"),
+      openBrowserSidePanelBtn: id("openBrowserSidePanelBtn"),
+      sidePanelNotice: id("sidePanelNotice"),
       statusBadge: id("statusBadge"),
       tabComposerBtn: id("tabComposerBtn"),
       tabDeleteBtn: id("tabDeleteBtn"),
@@ -863,14 +979,66 @@
 
     bindEvents();
     setupDragging();
+    applyDisplayMode();
     applyPanelVisibility();
     applyActiveTab();
+  }
+
+  let savedBodyMarginRight = null;
+
+  function applyDisplayMode() {
+    if (!hostEl || !els.panel || !els.pillBtn) return;
+    const isSidebar = uiPrefs.displayMode === "sidebar";
+
+    hostEl.classList.toggle("sidebar-mode", isSidebar);
+    hostEl.classList.toggle("collapsed", isSidebar && !uiPrefs.panelOpen);
+    els.panel.classList.toggle("sidebar-mode", isSidebar);
+    els.pillBtn.classList.toggle("sidebar-mode", isSidebar);
+
+    if (els.viewFloatingBtn && els.viewSidebarBtn) {
+      els.viewFloatingBtn.classList.toggle("active", !isSidebar);
+      els.viewSidebarBtn.classList.toggle("active", isSidebar);
+    }
+    if (els.pushPageRow && els.pushPageCheck) {
+      els.pushPageRow.classList.toggle("hidden", !isSidebar);
+      els.pushPageCheck.checked = uiPrefs.pushPage !== false;
+    }
+    if (els.toggleLayoutBtn) {
+      els.toggleLayoutBtn.innerHTML = isSidebar ? "&#10064;" : "&#9707;";
+      els.toggleLayoutBtn.title = isSidebar ? "Ubah ke mode Mengambang" : "Ubah ke mode Sidebar";
+    }
+    if (els.settingsDrawer && els.settingsBtn) {
+      els.settingsDrawer.classList.toggle("hidden", !uiPrefs.settingsOpen);
+      els.settingsBtn.classList.toggle("active", uiPrefs.settingsOpen);
+    }
+
+    if (isSidebar) {
+      hostEl.style.right = "";
+      hostEl.style.bottom = "";
+      if (document.body) {
+        if (savedBodyMarginRight === null) {
+          savedBodyMarginRight = document.body.style.marginRight || "";
+        }
+        if (uiPrefs.panelOpen && uiPrefs.pushPage !== false) {
+          document.body.style.marginRight = SIDEBAR_WIDTH + "px";
+        } else {
+          document.body.style.marginRight = savedBodyMarginRight;
+        }
+      }
+    } else {
+      hostEl.style.right = (uiPrefs.floatingRight || 18) + "px";
+      hostEl.style.bottom = (uiPrefs.floatingBottom || 18) + "px";
+      if (document.body && savedBodyMarginRight !== null) {
+        document.body.style.marginRight = savedBodyMarginRight;
+      }
+    }
   }
 
   function applyPanelVisibility() {
     if (!els.panel || !els.pillBtn) return;
     els.panel.classList.toggle("hidden", !uiPrefs.panelOpen);
     els.pillBtn.classList.toggle("hidden", uiPrefs.panelOpen);
+    applyDisplayMode();
   }
 
   function applyActiveTab() {
@@ -1185,6 +1353,18 @@
     }
   }
 
+  function setDisplayMode(mode, pushPageVal) {
+    uiPrefs.displayMode = mode === "sidebar" ? "sidebar" : "floating";
+    if (typeof pushPageVal === "boolean") {
+      uiPrefs.pushPage = pushPageVal;
+    }
+    applyDisplayMode();
+    saveState(STORAGE_KEY_DEL, {
+      displayMode: uiPrefs.displayMode,
+      pushPage: uiPrefs.pushPage
+    });
+  }
+
   function bindEvents() {
     els.minimizeBtn.addEventListener("click", () => {
       uiPrefs.panelOpen = false;
@@ -1196,6 +1376,36 @@
       uiPrefs.panelOpen = true;
       applyPanelVisibility();
       saveState(STORAGE_KEY_DEL, { panelOpen: true });
+    });
+
+    els.toggleLayoutBtn.addEventListener("click", () => {
+      setDisplayMode(uiPrefs.displayMode === "sidebar" ? "floating" : "sidebar");
+    });
+
+    els.settingsBtn.addEventListener("click", () => {
+      uiPrefs.settingsOpen = !uiPrefs.settingsOpen;
+      applyDisplayMode();
+    });
+
+    els.viewFloatingBtn.addEventListener("click", () => setDisplayMode("floating"));
+    els.viewSidebarBtn.addEventListener("click", () => setDisplayMode("sidebar"));
+    els.pushPageCheck.addEventListener("change", () => {
+      setDisplayMode(uiPrefs.displayMode, Boolean(els.pushPageCheck.checked));
+    });
+
+    els.openBrowserSidePanelBtn.addEventListener("click", () => {
+      els.sidePanelNotice.classList.add("hidden");
+      try {
+        chrome.runtime.sendMessage({ type: "OPEN_SIDE_PANEL" }, (res) => {
+          if (chrome.runtime.lastError || !res || !res.ok) {
+            els.sidePanelNotice.textContent = "Klik ikon ekstensi di toolbar Chrome lalu pilih 'Buka Side Panel' (Chrome mewajibkan klik langsung dari toolbar).";
+            els.sidePanelNotice.classList.remove("hidden");
+          }
+        });
+      } catch (_err) {
+        els.sidePanelNotice.textContent = "Buka melalui ikon ekstensi di toolbar Chrome.";
+        els.sidePanelNotice.classList.remove("hidden");
+      }
     });
 
     els.tabComposerBtn.addEventListener("click", () => {
@@ -1321,7 +1531,8 @@
     let startBottom = 18;
 
     els.dragHandle.addEventListener("mousedown", (e) => {
-      if (e.target === els.minimizeBtn) return;
+      if (uiPrefs.displayMode === "sidebar") return;
+      if (e.target && e.target.closest && e.target.closest("button")) return;
       dragging = true;
       startX = e.clientX;
       startY = e.clientY;
@@ -1335,8 +1546,12 @@
       if (!dragging) return;
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
-      hostEl.style.right = Math.max(8, Math.min(window.innerWidth - 100, startRight - dx)) + "px";
-      hostEl.style.bottom = Math.max(8, Math.min(window.innerHeight - 60, startBottom - dy)) + "px";
+      const r = Math.max(8, Math.min(window.innerWidth - 100, startRight - dx));
+      const b = Math.max(8, Math.min(window.innerHeight - 60, startBottom - dy));
+      uiPrefs.floatingRight = r;
+      uiPrefs.floatingBottom = b;
+      hostEl.style.right = r + "px";
+      hostEl.style.bottom = b + "px";
     });
 
     window.addEventListener("mouseup", () => { dragging = false; });
@@ -1349,12 +1564,39 @@
       const customKws = dom.parseCustomKeywords(deleteEngine.getSnapshot().config.customDeleteKeywords);
       sendResponse({
         activeTab: uiPrefs.activeTab,
+        displayMode: uiPrefs.displayMode,
+        pushPage: uiPrefs.pushPage,
         snapshot: deleteEngine.getSnapshot(),
         composerSnapshot: composerEngine.getSnapshot(),
         panelOpen: uiPrefs.panelOpen,
         diagnostics: dom.inspectPageDiagnostics(document, customKws),
         composerDiagnostics: cdom.inspectComposerDiagnostics(document)
       });
+      return;
+    }
+
+    if (message.type === "SET_DISPLAY_MODE") {
+      setDisplayMode(message.displayMode, message.pushPage);
+      sendResponse({ ok: true, displayMode: uiPrefs.displayMode, pushPage: uiPrefs.pushPage });
+      return;
+    }
+
+    if (message.type === "SET_ACTIVE_TAB") {
+      uiPrefs.activeTab = message.activeTab === "composer" ? "composer" : "delete";
+      applyActiveTab();
+      sendResponse({ ok: true, activeTab: uiPrefs.activeTab });
+      return;
+    }
+
+    if (message.type === "DIAGNOSE") {
+      if (message.tab === "composer") {
+        runComposerDiagnostics();
+        sendResponse({ ok: true, composerDiagnostics: cdom.inspectComposerDiagnostics(document) });
+      } else {
+        runDeleteDiagnostics();
+        const customKws = dom.parseCustomKeywords(deleteEngine.getSnapshot().config.customDeleteKeywords);
+        sendResponse({ ok: true, diagnostics: dom.inspectPageDiagnostics(document, customKws) });
+      }
       return;
     }
 
@@ -1366,7 +1608,31 @@
       return;
     }
 
+    if (message.type === "SET_COMPOSER_CONFIG") {
+      composerEngine.setConfig(message.config);
+      syncComposerInputs(composerEngine.getSnapshot().config);
+      saveState(STORAGE_KEY_COMP, composerEngine.getSnapshot().config);
+      sendResponse({ ok: true, composerSnapshot: composerEngine.getSnapshot() });
+      return;
+    }
+
+    if (message.type === "SET_COVER_FILES") {
+      const reconstructed = (message.files || []).map((f) => {
+        const bytes = new Uint8Array(f.bytes || []);
+        return new File([bytes], f.name || "cover.jpg", { type: f.mime || "image/jpeg" });
+      });
+      composerEngine.setCoverFiles(reconstructed);
+      els.cCoverCountText.textContent = reconstructed.length > 0
+        ? `${reconstructed.length} gambar dipilih (${reconstructed[0].name}${reconstructed.length > 1 ? ", ..." : ""})`
+        : "Belum ada gambar dipilih.";
+      renderComposerPreview();
+      sendResponse({ ok: true, coverCount: reconstructed.length });
+      return;
+    }
+
     if (message.type === "START") {
+      uiPrefs.activeTab = "delete";
+      applyActiveTab();
       if (message.config) {
         deleteEngine.setConfig(message.config);
         syncDeleteInputs(deleteEngine.getSnapshot().config);
@@ -1377,22 +1643,38 @@
       return;
     }
 
+    if (message.type === "START_COMPOSER") {
+      uiPrefs.activeTab = "composer";
+      applyActiveTab();
+      if (message.config) {
+        composerEngine.setConfig(message.config);
+        syncComposerInputs(composerEngine.getSnapshot().config);
+        saveState(STORAGE_KEY_COMP, composerEngine.getSnapshot().config);
+      }
+      composerEngine.start(message.config || readComposerConfigFromInputs());
+      sendResponse({ ok: true, composerSnapshot: composerEngine.getSnapshot() });
+      return;
+    }
+
     if (message.type === "PAUSE") {
-      if (uiPrefs.activeTab === "composer") composerEngine.pause();
+      const target = message.tab || uiPrefs.activeTab;
+      if (target === "composer") composerEngine.pause();
       else deleteEngine.pause();
       sendResponse({ ok: true });
       return;
     }
 
     if (message.type === "RESUME") {
-      if (uiPrefs.activeTab === "composer") composerEngine.resume();
+      const target = message.tab || uiPrefs.activeTab;
+      if (target === "composer") composerEngine.resume();
       else deleteEngine.resume();
       sendResponse({ ok: true });
       return;
     }
 
     if (message.type === "STOP") {
-      if (uiPrefs.activeTab === "composer") composerEngine.stop();
+      const target = message.tab || uiPrefs.activeTab;
+      if (target === "composer") composerEngine.stop();
       else deleteEngine.stop();
       sendResponse({ ok: true });
       return;
@@ -1412,8 +1694,14 @@
     getSavedState(STORAGE_KEY_DEL, (saved) => {
       if (typeof saved.panelOpen === "boolean") {
         uiPrefs.panelOpen = saved.panelOpen;
-        applyPanelVisibility();
       }
+      if (saved.displayMode === "sidebar" || saved.displayMode === "floating") {
+        uiPrefs.displayMode = saved.displayMode;
+      }
+      if (typeof saved.pushPage === "boolean") {
+        uiPrefs.pushPage = saved.pushPage;
+      }
+      applyPanelVisibility();
       const restoredDel = Object.assign({}, engineFactory.DEFAULT_CONFIG, saved);
       deleteEngine.setConfig(restoredDel);
       syncDeleteInputs(deleteEngine.getSnapshot().config);

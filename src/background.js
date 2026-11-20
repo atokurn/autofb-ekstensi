@@ -29,5 +29,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       chrome.action.setBadgeBackgroundColor({ tabId, color }).catch(() => {});
     }
     sendResponse({ ok: true });
+    return;
+  }
+
+  if (message.type === "OPEN_SIDE_PANEL") {
+    const windowId = message.windowId || (sender && sender.tab && sender.tab.windowId);
+    if (!chrome.sidePanel || typeof chrome.sidePanel.open !== "function" || !windowId) {
+      sendResponse({ ok: false, error: "Side Panel API tidak tersedia di browser ini." });
+      return;
+    }
+    chrome.sidePanel.open({ windowId })
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => sendResponse({ ok: false, error: err && err.message ? err.message : String(err) }));
+    return true;
   }
 });

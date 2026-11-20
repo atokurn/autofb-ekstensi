@@ -333,13 +333,18 @@
     // Check immediate row ancestor for column header labels (Judul, Tanggal dipublikasikan, Status)
     const rowLike = control.closest('[role="row"], tr') || findLikelyRowWrapper(control, allCheckboxes || []);
     if (rowLike) {
-      const text = normalizeText(rowLike.textContent || "");
-      let headerHits = 0;
-      for (const kw of DEFAULT_KEYWORDS.headerLabels) {
-        if (text.includes(kw)) headerHits++;
-      }
-      if (headerHits >= 1 && !rowLike.querySelector('[aria-haspopup="menu"]')) {
-        return true;
+      const hasContentSignals = Boolean(
+        rowLike.querySelector('img, [aria-haspopup="menu"]')
+      );
+      if (!hasContentSignals) {
+        const text = normalizeText(rowLike.textContent || "");
+        let headerHits = 0;
+        for (const kw of DEFAULT_KEYWORDS.headerLabels) {
+          if (text.includes(kw)) headerHits++;
+        }
+        if (headerHits >= 2 || (headerHits === 1 && text.length <= 60)) {
+          return true;
+        }
       }
     }
 
@@ -656,6 +661,19 @@
     };
   }
 
+  function nudgeScrollToLoadMore(doc) {
+    const documentRef = doc || document;
+    const win = (documentRef && documentRef.defaultView) || (typeof window !== "undefined" ? window : null);
+    try {
+      if (win && typeof win.scrollBy === "function") {
+        win.scrollBy(0, 120);
+        win.scrollBy(0, -120);
+      }
+    } catch (_err) {
+      // ignore
+    }
+  }
+
   const api = {
     EXTENSION_HOST_ID,
     DEFAULT_KEYWORDS,
@@ -668,10 +686,12 @@
     findContentContext,
     findBulkDeleteButton,
     findRowMoreButton,
+    findOpenMenus,
     findDeleteMenuItem,
     findTopDialog,
     findConfirmDeleteButton,
     findDialogDismissButton,
+    nudgeScrollToLoadMore,
     inspectPageDiagnostics
   };
 

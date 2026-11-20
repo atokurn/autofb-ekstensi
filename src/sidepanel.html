@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Meta Auto Manager - Side Panel</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #F8FAFC;
+      color: #111827;
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+    .hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 14px;
+      background: linear-gradient(135deg, #1877F2 0%, #125AC4 100%);
+      color: #FFFFFF;
+    }
+    .hdr-title { font-size: 14px; font-weight: 700; }
+    .badge {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.22);
+    }
+    .badge.running { background: #EF4444; }
+    .badge.paused { background: #F59E0B; color: #111827; }
+    .badge.completed { background: #16A34A; }
+    .badge.error { background: #B91C1C; }
+
+    .tabs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      background: #E2E8F0;
+      padding: 4px;
+      gap: 4px;
+    }
+    .tab-btn {
+      border: none;
+      background: transparent;
+      padding: 8px;
+      border-radius: 7px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #475569;
+      cursor: pointer;
+    }
+    .tab-btn.active {
+      background: #FFFFFF;
+      color: #1877F2;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.1);
+    }
+
+    .wrap {
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      flex: 1;
+    }
+    .card {
+      background: #FFFFFF;
+      border: 1px solid #E5E7EB;
+      border-radius: 10px;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .field { display: flex; flex-direction: column; gap: 3px; }
+    .field label { font-size: 11px; font-weight: 600; color: #374151; }
+    .field input, .field select, .field textarea {
+      width: 100%;
+      padding: 6px 8px;
+      border: 1px solid #D1D5DB;
+      border-radius: 7px;
+      font-size: 12px;
+      font-family: inherit;
+      background: #FFFFFF;
+    }
+    .field textarea { min-height: 50px; resize: vertical; }
+    .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+
+    .check-row {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #1F2937;
+      cursor: pointer;
+    }
+    .check-row input { margin: 0; }
+    .hint { font-size: 11px; color: #6B7280; line-height: 1.4; }
+
+    .actions { display: flex; gap: 7px; }
+    .btn {
+      flex: 1;
+      border: none;
+      border-radius: 8px;
+      padding: 9px 10px;
+      font-size: 12.5px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .btn-primary { background: #1877F2; color: #FFFFFF; }
+    .btn-danger { background: #DC2626; color: #FFFFFF; }
+    .btn-warn { background: #F59E0B; color: #111827; }
+    .btn-secondary {
+      background: #F3F4F6;
+      color: #1F2937;
+      border: 1px solid #D1D5DB;
+      flex: 0 0 auto;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+      background: #FFFFFF;
+      border: 1px solid #E5E7EB;
+      border-radius: 9px;
+      padding: 8px;
+      text-align: center;
+    }
+    .stat-val { font-size: 15px; font-weight: 800; }
+    .stat-lbl { font-size: 10px; color: #6B7280; }
+
+    .log-box {
+      max-height: 180px;
+      overflow-y: auto;
+      background: #0F172A;
+      color: #E2E8F0;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 10.5px;
+      line-height: 1.45;
+    }
+    .log-time { color: #64748B; margin-right: 4px; }
+    .log-success { color: #4ADE80; }
+    .log-warn { color: #FBBF24; }
+    .log-error { color: #F87171; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <header class="hdr">
+    <div class="hdr-title">Meta Auto Manager</div>
+    <span id="statusBadge" class="badge">Siap</span>
+  </header>
+
+  <div id="wrongPageBox" class="wrap hidden">
+    <div class="card">
+      <div class="hint">
+        Buka tab <strong>business.facebook.com</strong> terlebih dahulu (halaman Konten atau Bulk Upload Reels) untuk memakai kontrol sidebar ini.
+      </div>
+      <button id="openMetaBtn" class="btn btn-primary" type="button">Buka Meta Business Suite</button>
+    </div>
+  </div>
+
+  <div id="mainContent" class="hidden">
+    <div class="tabs">
+      <button id="tabComposerBtn" class="tab-btn" type="button">Isi &amp; Jadwal</button>
+      <button id="tabDeleteBtn" class="tab-btn" type="button">Hapus Konten</button>
+    </div>
+
+    <!-- COMPOSER PANE -->
+    <div id="composerPane" class="wrap">
+      <div class="card">
+        <label class="check-row"><input id="cEnableDesc" type="checkbox" checked /> Isi Deskripsi Otomatis</label>
+        <div class="field">
+          <label for="cCustomTitle">Judul utama (kosong = nama video)</label>
+          <input id="cCustomTitle" type="text" placeholder="misal: My Online Girlfriend" />
+        </div>
+        <div class="field">
+          <label for="cDescTemplate">Template deskripsi</label>
+          <textarea id="cDescTemplate">{judul} Episode {episode}</textarea>
+        </div>
+        <div class="row-3">
+          <div class="field">
+            <label for="cEpMode">Episode</label>
+            <select id="cEpMode">
+              <option value="sequence">Urut</option>
+              <option value="filename">Dari nama</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="cStartEp">Mulai Ep</label>
+            <input id="cStartEp" type="number" min="0" value="1" />
+          </div>
+          <div class="field">
+            <label for="cEpStep">Tambah (+)</label>
+            <input id="cEpStep" type="number" min="1" value="1" />
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <label class="check-row"><input id="cEnableSched" type="checkbox" checked /> Jadwal Otomatis</label>
+        <label class="check-row" style="font-weight:500;"><input id="cUseLastSched" type="checkbox" /> Lanjutkan jadwal terakhir</label>
+        <div class="row-2">
+          <div class="field">
+            <label for="cStartDate">Tanggal mulai</label>
+            <input id="cStartDate" type="date" />
+          </div>
+          <div class="field">
+            <label for="cStartTime">Jam mulai</label>
+            <input id="cStartTime" type="time" />
+          </div>
+        </div>
+        <div class="row-2">
+          <div class="field">
+            <label for="cIntervalVal">Setiap</label>
+            <input id="cIntervalVal" type="number" min="1" value="1" />
+          </div>
+          <div class="field">
+            <label for="cIntervalUnit">Satuan</label>
+            <select id="cIntervalUnit">
+              <option value="minute">Menit</option>
+              <option value="hour" selected>Jam</option>
+              <option value="day">Hari</option>
+            </select>
+          </div>
+        </div>
+        <label class="check-row" style="font-weight:500;"><input id="cWindowEnabled" type="checkbox" /> Batasi jam aktif harian</label>
+        <div class="row-2">
+          <div class="field"><label for="cWindowStart">Mulai aktif</label><input id="cWindowStart" type="time" value="08:00" /></div>
+          <div class="field"><label for="cWindowEnd">Selesai aktif</label><input id="cWindowEnd" type="time" value="22:00" /></div>
+        </div>
+        <div class="row-2">
+          <div class="field"><label for="cMaxPerDay">Maks/hari</label><input id="cMaxPerDay" type="number" min="0" value="0" /></div>
+          <div class="field"><label for="cJitterMin">Acak (± mnt)</label><input id="cJitterMin" type="number" min="0" value="0" /></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <label class="check-row"><input id="cEnableCover" type="checkbox" /> Unggah Cover Otomatis</label>
+        <div class="field">
+          <label for="cCoverFiles">Pilih gambar cover</label>
+          <input id="cCoverFiles" type="file" accept="image/*" multiple />
+          <div id="cCoverInfo" class="hint">Belum ada gambar dipilih.</div>
+        </div>
+        <div class="field">
+          <label for="cCoverMode">Pencocokan cover</label>
+          <select id="cCoverMode">
+            <option value="sequential">Urutan file (1-&gt;1, 2-&gt;2)</option>
+            <option value="filename">Cocokkan nama/episode video</option>
+            <option value="single">1 gambar untuk semua</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="cStartBtn" class="btn btn-primary" type="button">Mulai Isi &amp; Jadwal</button>
+        <button id="cPauseBtn" class="btn btn-warn hidden" type="button">Jeda</button>
+        <button id="cResumeBtn" class="btn btn-primary hidden" type="button">Lanjut</button>
+        <button id="cStopBtn" class="btn btn-secondary hidden" type="button">Stop</button>
+        <button id="cDiagBtn" class="btn btn-secondary" type="button">Cek</button>
+      </div>
+
+      <div class="stats">
+        <div><div class="stat-val" id="cDoneVal">0</div><div class="stat-lbl">Selesai</div></div>
+        <div><div class="stat-val" id="cTotalVal">0</div><div class="stat-lbl">Target</div></div>
+        <div><div class="stat-val" id="cFailVal">0</div><div class="stat-lbl">Catatan</div></div>
+      </div>
+
+      <div id="cLogBox" class="log-box"></div>
+    </div>
+
+    <!-- DELETE PANE -->
+    <div id="deletePane" class="wrap hidden">
+      <div class="card">
+        <div class="field">
+          <label for="dModeSelect">Mode Penghapusan</label>
+          <select id="dModeSelect">
+            <option value="bulk">Bulk Delete (Pilih Semua &amp; Hapus)</option>
+            <option value="single">1 per 1 (Mulai Konten Teratas)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="dSingleMethod">Metode 1 per 1</label>
+          <select id="dSingleMethod">
+            <option value="auto">Otomatis (Menu ... lalu Checkbox)</option>
+            <option value="menu">Hanya Menu (...)</option>
+            <option value="checkbox">Hanya Checkbox</option>
+          </select>
+        </div>
+        <div class="row-2">
+          <div class="field"><label for="dDelayInput">Jeda (dtk)</label><input id="dDelayInput" type="number" min="0.5" step="0.5" value="2.5" /></div>
+          <div class="field"><label for="dMaxInput">Maks (0=all)</label><input id="dMaxInput" type="number" min="0" value="0" /></div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="dStartBtn" class="btn btn-danger" type="button">Mulai Hapus</button>
+        <button id="dPauseBtn" class="btn btn-warn hidden" type="button">Jeda</button>
+        <button id="dResumeBtn" class="btn btn-primary hidden" type="button">Lanjut</button>
+        <button id="dStopBtn" class="btn btn-secondary hidden" type="button">Stop</button>
+        <button id="dDiagBtn" class="btn btn-secondary" type="button">Cek</button>
+      </div>
+
+      <div class="stats">
+        <div><div class="stat-val" id="dDoneVal">0</div><div class="stat-lbl">Terhapus</div></div>
+        <div><div class="stat-val" id="dSecVal">0</div><div class="stat-lbl" id="dSecLbl">Batch</div></div>
+        <div><div class="stat-val" id="dFailVal">0</div><div class="stat-lbl">Gagal</div></div>
+      </div>
+
+      <div id="dLogBox" class="log-box"></div>
+    </div>
+  </div>
+  <script src="sidepanel.js"></script>
+</body>
+</html>
