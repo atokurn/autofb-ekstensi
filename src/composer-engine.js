@@ -427,9 +427,26 @@
       return null;
     }
 
+    function closeAnySchedulePopover() {
+      try {
+        if (doc && typeof KeyboardEvent === "function") {
+          const evt = new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true });
+          doc.dispatchEvent(evt);
+          if (doc.body) doc.body.dispatchEvent(evt);
+        }
+      } catch (_err) {
+        // ignore
+      }
+    }
+
     async function applyScheduleForRow(row, targetDate, token) {
       if (!row.scheduleBtn) {
         return { ok: false, reason: "Tombol jadwal pada baris tidak ditemukan." };
+      }
+
+      if (cdom.findSchedulePopover(doc)) {
+        closeAnySchedulePopover();
+        await smartSleep(150, token);
       }
 
       domBase.clickElement(row.scheduleBtn);
@@ -438,21 +455,28 @@
         return { ok: false, reason: "Popover jadwal tidak muncul." };
       }
 
-      // Click "Schedule" / "Jadwalkan" tab inside popover
+      // Click "Schedule" / "Jadwal" tab inside popover
       domBase.clickElement(popover.scheduleTab);
       if (!(await smartSleep(Math.min(350, config.stepDelayMs), token))) {
         return { ok: false, aborted: true };
       }
 
-      const refreshed = cdom.findSchedulePopover(doc) || popover;
-      const setRes = cdom.setScheduleInputsInPopover(refreshed, targetDate, doc);
+      // Wait for date/time inputs to mount inside the active Schedule/Jadwal tab
+      const readyPopover = await waitFor(() => {
+        const pop = cdom.findSchedulePopover(doc) || popover;
+        const classified = cdom.classifyScheduleInputs(pop.container, doc);
+        return (classified.dateInput || classified.timeInputs.length > 0) ? pop : null;
+      }, 2000, 100, token) || cdom.findSchedulePopover(doc) || popover;
+
+      const setRes = cdom.setScheduleInputsInPopover(readyPopover, targetDate, doc);
       if (!setRes.ok) {
+        closeAnySchedulePopover();
         return setRes;
       }
 
       if (!(await smartSleep(250, token))) return { ok: false, aborted: true };
 
-      domBase.clickElement(refreshed.updateBtn);
+      domBase.clickElement(readyPopover.updateBtn);
       await waitFor(() => !cdom.findSchedulePopover(doc), 3000, 120, token);
       return { ok: true };
     }

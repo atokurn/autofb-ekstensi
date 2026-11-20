@@ -26,17 +26,24 @@
     "save as draft",
     "scheduling options",
     "terbitkan sekarang",
+    "terbitkan",
+    "jadwal",
     "jadwalkan",
     "simpan sebagai draf",
-    "opsi penjadwalan"
+    "opsi penjadwalan",
+    "opsi penja"
   ];
 
-  const SCHEDULE_TAB_LABELS = ["schedule", "jadwalkan"];
+  const SCHEDULE_TAB_LABELS = ["schedule", "jadwal", "jadwalkan"];
   const UPDATE_BTN_LABELS = ["update", "perbarui", "simpan", "save", "terapkan", "apply"];
   const MORE_EDIT_LABELS = [
     "more edit options",
     "more edit opti",
     "opsi pengeditan lainnya",
+    "opsi pengeditan",
+    "opsi edit lainnya",
+    "opsi edit",
+    "opsi edi",
     "edit",
     "sunting"
   ];
@@ -350,8 +357,8 @@
       if (SCHEDULE_BTN_LABELS.some((kw) => lbl === kw || lbl.startsWith(kw))) {
         return btn;
       }
-      // If already scheduled, Meta shows the date/time string like "20 Nov 2026" or "20 November 2026, 17:03"
-      if (/\b\d{4}\b/.test(lbl) && /\d{1,2}:\d{2}/.test(lbl)) {
+      // If already scheduled, Meta shows the date/time string like "20 Nov 2026" or "20 November 2026, 17:03" or "20 Nov..."
+      if (/\b\d{4}\b/.test(lbl) && /\d{1,2}[:.]\d{2}/.test(lbl)) {
         return btn;
       }
     }
@@ -465,13 +472,13 @@
 
   function findSchedulePopover(doc) {
     const documentRef = doc || document;
-    // Look for visible button matching "Schedule" / "Jadwalkan" inside a floating container with an "Update"/"Perbarui" button
+    // Look for visible tab/button matching "Schedule" / "Jadwal" / "Jadwalkan" inside a floating container with an "Update"/"Perbarui" button
     const buttons = Array.from(
-      documentRef.querySelectorAll('button, [role="button"], [role="tab"], [role="radio"], label')
+      documentRef.querySelectorAll('button, [role="button"], [role="tab"], [role="radio"], [aria-checked], [aria-selected], label')
     ).filter((el) => isVisible(el, documentRef) && !isOwn(el));
 
     const schedTabs = buttons.filter((el) => {
-      const lbl = normalize(el.innerText || el.textContent || "");
+      const lbl = normalize(el.innerText || el.textContent || el.getAttribute("aria-label") || "");
       return SCHEDULE_TAB_LABELS.includes(lbl);
     });
 

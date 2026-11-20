@@ -548,3 +548,110 @@ test("setNativeInputValue safely handles Lexical contenteditable, detached nodes
   row.remove();
   assert.equal(cdom.setNativeInputValue(innerEditable, "X", doc), false);
 });
+
+test("Composer handles Indonesian Bulk Upload labels (Terbitkan sekarang -> Jadwal tab -> Perbarui) and Opsi edi...", async () => {
+  const doc = new MockDocument();
+  const table = doc.createElement("div", { role: "table" });
+  doc.body.appendChild(table);
+
+  const row = doc.createElement("div", { role: "row" });
+  const cb = doc.createElement("input", { type: "checkbox" });
+  cb._rect = { left: 20, top: 120, width: 18, height: 18 };
+  const titleEl = doc.createElement("span");
+  titleEl.textContent = "Video Ep 1";
+  const desc = doc.createElement("textarea");
+  const schedBtn = doc.createElement("button");
+  schedBtn.textContent = "Terbitkan sekarang";
+  const moreBtn = doc.createElement("button");
+  moreBtn.textContent = "Opsi edi...";
+
+  let savedDate = "";
+  let savedTime = "";
+  let activePop = null;
+
+  schedBtn.addEventListener("click", () => {
+    if (activePop) activePop.remove();
+    const pop = doc.createElement("div");
+    const pubTab = doc.createElement("div", { role: "tab", "aria-selected": "true" });
+    pubTab.textContent = "Terbitkan sekarang";
+    const schedTab = doc.createElement("div", { role: "tab", "aria-selected": "false" });
+    schedTab.textContent = "Jadwal";
+    const draftTab = doc.createElement("div", { role: "tab", "aria-selected": "false" });
+    draftTab.textContent = "Simpan sebagai Draf";
+    const inputsWrap = doc.createElement("div");
+
+    let dateInput = null;
+    let hourInput = null;
+    let minInput = null;
+
+    schedTab.addEventListener("click", () => {
+      if (!dateInput) {
+        dateInput = doc.createElement("input", { type: "text" });
+        dateInput.value = "20 November 2026";
+        hourInput = doc.createElement("input", { type: "text", role: "spinbutton" });
+        hourInput.value = "20";
+        minInput = doc.createElement("input", { type: "text", role: "spinbutton" });
+        minInput.value = "31";
+        inputsWrap.appendChild(dateInput);
+        inputsWrap.appendChild(hourInput);
+        inputsWrap.appendChild(minInput);
+      }
+    });
+
+    const updateBtn = doc.createElement("button");
+    updateBtn.textContent = "Perbarui";
+    updateBtn.addEventListener("click", () => {
+      savedDate = dateInput ? dateInput.value : "";
+      savedTime = (hourInput && minInput) ? `${hourInput.value}:${minInput.value}` : "";
+      pop.remove();
+      activePop = null;
+    });
+
+    pop.appendChild(pubTab);
+    pop.appendChild(schedTab);
+    pop.appendChild(draftTab);
+    pop.appendChild(inputsWrap);
+    pop.appendChild(updateBtn);
+    doc.body.appendChild(pop);
+    activePop = pop;
+  });
+
+  row.appendChild(cb);
+  row.appendChild(titleEl);
+  row.appendChild(desc);
+  row.appendChild(schedBtn);
+  row.appendChild(moreBtn);
+  table.appendChild(row);
+
+  let clock = 0;
+  const eng = cengine.createComposerEngine({
+    document: doc,
+    composerDom: cdom,
+    domBase,
+    sleep: (ms) => {
+      clock += Math.max(1, ms || 1);
+      return Promise.resolve();
+    },
+    now: () => clock
+  });
+
+  await eng.start({
+    enableDescription: true,
+    customTitle: "Drama",
+    descriptionTemplate: "{judul} Episode {episode}",
+    enableSchedule: true,
+    scheduleStartDate: "2026-11-22",
+    scheduleStartTime: "21:15",
+    enableCover: false,
+    delayMs: 200,
+    stepDelayMs: 150
+  });
+
+  const snap = eng.getSnapshot();
+  assert.equal(snap.status, "completed");
+  assert.equal(snap.processedCount, 1);
+  assert.equal(desc.value, "Drama Episode 1");
+  assert.equal(savedDate, "22 November 2026");
+  assert.equal(savedTime, "21:15");
+  assert.ok(cdom.findRowMoreEditButton(row, doc));
+});
