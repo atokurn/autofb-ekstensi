@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Meta Content Auto Deleter</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header class="hdr">
+      <div class="hdr-title">Meta Auto Deleter</div>
+      <span id="statusBadge" class="badge">Siap</span>
+    </header>
+
+    <div id="wrongPageBox" class="card hidden">
+      <p class="muted">
+        Buka halaman <strong>Konten</strong> di Meta Business Suite
+        (<code>business.facebook.com</code>) untuk mulai menghapus konten.
+      </p>
+      <button id="openMetaBtn" class="btn btn-primary" type="button">Buka Meta Business Suite</button>
+    </div>
+
+    <div id="mainBox" class="hidden">
+      <div class="card">
+        <div class="info-row">
+          <span>Konten terdeteksi</span>
+          <strong id="rowCountText">0 baris</strong>
+        </div>
+        <div class="info-row">
+          <span>Sudah terhapus</span>
+          <strong id="deletedText">0</strong>
+        </div>
+      </div>
+
+      <div class="card">
+        <label class="lbl" for="modeSelect">Mode Penghapusan</label>
+        <select id="modeSelect">
+          <option value="bulk">Bulk Delete (Pilih Semua &amp; Hapus)</option>
+          <option value="single">1 per 1 (Mulai Konten Teratas)</option>
+        </select>
+
+        <div class="row-2">
+          <div>
+            <label class="lbl" for="delayInput">Jeda (detik)</label>
+            <input id="delayInput" type="number" min="0.5" step="0.5" value="2.5" />
+          </div>
+          <div>
+            <label class="lbl" for="maxInput">Maks (0=semua)</label>
+            <input id="maxInput" type="number" min="0" step="1" value="0" />
+          </div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="startBtn" class="btn btn-danger" type="button">Mulai Hapus</button>
+        <button id="pauseBtn" class="btn btn-warn hidden" type="button">Jeda</button>
+        <button id="resumeBtn" class="btn btn-primary hidden" type="button">Lanjut</button>
+        <button id="stopBtn" class="btn btn-secondary hidden" type="button">Stop</button>
+      </div>
+
+      <button id="togglePanelBtn" class="btn btn-outline" type="button">Tampilkan / Sembunyikan Panel Halaman</button>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
