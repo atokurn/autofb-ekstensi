@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Meta Content Auto Deleter",
-  "version": "1.0.0",
-  "description": "Ekstensi Chrome untuk menghapus konten Meta Business Suite secara otomatis: Bulk Delete atau 1 per 1 dari konten teratas.",
+  "name": "Meta Auto Manager",
+  "version": "1.1.0",
+  "description": "Ekstensi Chrome untuk Meta Business Suite: Hapus konten otomatis (Bulk / 1 per 1) serta isi deskripsi, jadwal otomatis, dan cover upload.",
   "permissions": [
     "storage",
     "activeTab"
@@ -16,7 +16,7 @@
     "128": "icons/icon128.png"
   },
   "action": {
-    "default_title": "Meta Content Auto Deleter",
+    "default_title": "Meta Auto Manager",
     "default_popup": "src/popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
@@ -35,6 +35,8 @@
       "js": [
         "src/dom-helpers.js",
         "src/engine.js",
+        "src/composer-dom.js",
+        "src/composer-engine.js",
         "src/content.js"
       ],
       "run_at": "document_idle"

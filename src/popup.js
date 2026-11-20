@@ -3,6 +3,10 @@
 (function () {
   const statusBadge = document.getElementById("statusBadge");
   const wrongPageBox = document.getElementById("wrongPageBox");
+  const composerInfoBox = document.getElementById("composerInfoBox");
+  const compRowCountText = document.getElementById("compRowCountText");
+  const compDoneText = document.getElementById("compDoneText");
+  const compTogglePanelBtn = document.getElementById("compTogglePanelBtn");
   const mainBox = document.getElementById("mainBox");
   const openMetaBtn = document.getElementById("openMetaBtn");
   const rowCountText = document.getElementById("rowCountText");
@@ -31,7 +35,24 @@
   }
 
   function render(res) {
-    if (!res || !res.snapshot) return;
+    if (!res) return;
+
+    if (res.activeTab === "composer" && res.composerSnapshot) {
+      composerInfoBox.classList.remove("hidden");
+      mainBox.classList.add("hidden");
+      const cSnap = res.composerSnapshot;
+      const cDiag = res.composerDiagnostics || {};
+      statusBadge.textContent = statusLabel(cSnap.status);
+      statusBadge.className = "badge " + cSnap.status;
+      compRowCountText.textContent = (cDiag.rowCount ?? 0) + " baris";
+      compDoneText.textContent = `${cSnap.processedCount ?? 0} / ${cSnap.totalTarget ?? 0}`;
+      return;
+    }
+
+    composerInfoBox.classList.add("hidden");
+    mainBox.classList.remove("hidden");
+    if (!res.snapshot) return;
+
     const snap = res.snapshot;
     const diag = res.diagnostics || {};
 
@@ -72,6 +93,7 @@
       if (chrome.runtime.lastError) {
         wrongPageBox.classList.remove("hidden");
         mainBox.classList.add("hidden");
+        composerInfoBox.classList.add("hidden");
         return;
       }
       if (cb) cb(res);
@@ -92,7 +114,6 @@
     sendToTab({ type: "GET_STATE" }, (res) => {
       if (res && res.snapshot) {
         wrongPageBox.classList.add("hidden");
-        mainBox.classList.remove("hidden");
         render(res);
       }
     });
@@ -103,6 +124,7 @@
     if (!tab || !tab.url || !tab.url.startsWith("https://business.facebook.com/")) {
       wrongPageBox.classList.remove("hidden");
       mainBox.classList.add("hidden");
+      composerInfoBox.classList.add("hidden");
       return;
     }
     activeTabId = tab.id;
@@ -129,4 +151,5 @@
   resumeBtn.addEventListener("click", () => sendToTab({ type: "RESUME" }, refresh));
   stopBtn.addEventListener("click", () => sendToTab({ type: "STOP" }, refresh));
   togglePanelBtn.addEventListener("click", () => sendToTab({ type: "TOGGLE_PANEL" }));
+  compTogglePanelBtn.addEventListener("click", () => sendToTab({ type: "TOGGLE_PANEL" }));
 })();

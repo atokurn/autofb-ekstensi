@@ -3,22 +3,43 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Meta Content Auto Deleter</title>
+  <title>Meta Auto Manager</title>
   <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
   <div class="wrap">
     <header class="hdr">
-      <div class="hdr-title">Meta Auto Deleter</div>
+      <div class="hdr-title">Meta Auto Manager</div>
       <span id="statusBadge" class="badge">Siap</span>
     </header>
 
     <div id="wrongPageBox" class="card hidden">
       <p class="muted">
-        Buka halaman <strong>Konten</strong> di Meta Business Suite
-        (<code>business.facebook.com</code>) untuk mulai menghapus konten.
+        Buka <strong>Meta Business Suite</strong> (<code>business.facebook.com</code>) untuk memakai fitur
+        <strong>Isi &amp; Jadwal</strong> (Bulk Upload) atau <strong>Hapus Konten</strong>.
       </p>
       <button id="openMetaBtn" class="btn btn-primary" type="button">Buka Meta Business Suite</button>
+    </div>
+
+    <div id="composerInfoBox" class="hidden">
+      <div class="card">
+        <div class="info-row">
+          <span>Mode halaman</span>
+          <strong>Bulk Upload (Isi &amp; Jadwal)</strong>
+        </div>
+        <div class="info-row">
+          <span>Video terdeteksi</span>
+          <strong id="compRowCountText">0 baris</strong>
+        </div>
+        <div class="info-row">
+          <span>Sudah diproses</span>
+          <strong id="compDoneText">0</strong>
+        </div>
+      </div>
+      <p class="muted" style="margin-bottom:8px;">
+        Gunakan panel mengambang di halaman untuk mengatur template deskripsi, interval jadwal, dan gambar cover.
+      </p>
+      <button id="compTogglePanelBtn" class="btn btn-primary" type="button">Tampilkan / Sembunyikan Panel</button>
     </div>
 
     <div id="mainBox" class="hidden">
