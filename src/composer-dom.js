@@ -60,27 +60,63 @@
     return (doc && doc.defaultView) || (typeof window !== "undefined" ? window : null);
   }
 
-  function setNativeInputValue(el, value, doc) {
-    if (!el || !el.isConnected) return false;
-    const ownerDoc = el.ownerDocument || doc || (typeof document !== "undefined" ? document : null);
-    const win = getDocView(ownerDoc);
-    const strVal = String(value == null ? "" : value);
+  function resolveEditableTarget(el) {
+    if (!el || !el.isConnected) return null;
+    if (el.tagName === "TEXTAREA" || el.tagName === "INPUT") return el;
+    if (el.isContentEditable === true || (el.getAttribute && el.getAttribute("contenteditable") === "true")) {
+      return el;
+    }
+    if (typeof el.querySelector === "function") {
+      const inner = el.querySelector('textarea, input[type="text"], [contenteditable="true"]');
+      if (inner && inner.isConnected) return inner;
+    }
+    return el;
+  }
 
-    // If caller passed a role="textbox" wrapper around a real textarea/contenteditable, unwrap it
-    let target = el;
-    if (
-      target.tagName !== "TEXTAREA" &&
-      target.tagName !== "INPUT" &&
-      target.getAttribute &&
-      target.getAttribute("contenteditable") !== "true" &&
-      !target.isContentEditable &&
-      typeof target.querySelector === "function"
-    ) {
-      const inner = target.querySelector('textarea, input[type="text"], [contenteditable="true"]');
-      if (inner && inner.isConnected) {
-        target = inner;
+  function focusDescriptionField(el, doc) {
+    const target = resolveEditableTarget(el);
+    if (!target || !target.isConnected) return null;
+    if (typeof target.scrollIntoView === "function") {
+      try {
+        target.scrollIntoView({ block: "nearest", inline: "nearest" });
+      } catch (_err) {
+        // ignore
       }
     }
+    if (typeof target.click === "function") {
+      target.click();
+    }
+    if (typeof target.focus === "function") {
+      target.focus();
+    }
+    const ownerDoc = target.ownerDocument || doc || (typeof document !== "undefined" ? document : null);
+    if (ownerDoc && ownerDoc.activeElement && ownerDoc.activeElement !== target) {
+      const active = ownerDoc.activeElement;
+      if (active.tagName === "TEXTAREA" || active.tagName === "INPUT" || active.isContentEditable === true ||
+          (active.getAttribute && active.getAttribute("contenteditable") === "true")) {
+        return active;
+      }
+    }
+    return target;
+  }
+
+  function isMetaErrorPage(doc) {
+    const documentRef = doc || (typeof document !== "undefined" ? document : null);
+    if (!documentRef || !documentRef.body) return false;
+    const txt = normalize(documentRef.body.textContent || "");
+    return (
+      txt.includes("kami mengalami masalah dalam menyelesaikan permintaan anda") ||
+      txt.includes("we're having trouble completing your request") ||
+      txt.includes("something went wrong")
+    );
+  }
+
+  function setNativeInputValue(el, value, doc) {
+    const target = resolveEditableTarget(el);
+    if (!target || !target.isConnected) return false;
+    const ownerDoc = target.ownerDocument || doc || (typeof document !== "undefined" ? document : null);
+    const win = getDocView(ownerDoc);
+    const strVal = String(value == null ? "" : value);
 
     if (typeof target.scrollIntoView === "function") {
       try {
@@ -114,62 +150,55 @@
       return true;
     }
 
-    // ContentEditable / Lexical / Draft.js textbox
-    const isEditable = target.isContentEditable === true ||
-      (target.getAttribute && (target.getAttribute("contenteditable") === "true" || target.getAttribute("role") === "textbox"));
-    if (isEditable) {
+    // ContentEditable / Lexical / Draft.js editor: ONLY treat as editable if actually contentEditable
+    const isRealContentEditable = target.isContentEditable === true ||
+      (target.getAttribute && target.getAttribute("contenteditable") === "true");
+    const isMockTextbox = !ownerDoc || typeof ownerDoc.execCommand !== "function";
+
+    if (isRealContentEditable || (isMockTextbox && target.getAttribute && target.getAttribute("role") === "textbox")) {
       const hasExecCommand = ownerDoc && typeof ownerDoc.execCommand === "function";
 
       if (hasExecCommand) {
         try {
-          if (typeof target.click === "function") {
-            target.click();
-          }
           if (typeof target.focus === "function") {
             target.focus();
           }
           if (!target.isConnected) return false;
 
+          // Ensure focus is actually inside target before running execCommand (never selectAll on document!)
+          const active = ownerDoc.activeElement;
+          const focusInside = !active || active === target ||
+            (typeof target.contains === "function" && target.contains(active));
+          if (!focusInside) {
+            return false;
+          }
+
+          const hasExistingText = normalize(target.textContent || "").length > 0;
           if (win && typeof win.getSelection === "function" && typeof ownerDoc.createRange === "function") {
+            const sel = win.getSelection();
             const range = ownerDoc.createRange();
-            range.selectNodeContents(target);
-            if (range.startContainer && range.startContainer.isConnected) {
-              const sel = win.getSelection();
-              if (sel) {
+            const innerNode = target.querySelector ? (target.querySelector("p, div") || target) : target;
+            if (innerNode && innerNode.isConnected) {
+              range.selectNodeContents(innerNode);
+              if (!hasExistingText) {
+                range.collapse(true);
+              }
+              if (range.startContainer && range.startContainer.isConnected && sel) {
                 sel.removeAllRanges();
                 sel.addRange(range);
               }
             }
           }
 
-          ownerDoc.execCommand("selectAll", false, null);
-          ownerDoc.execCommand("insertText", false, strVal);
-        } catch (_err) {
-          // Never wipe Lexical/React child nodes via target.textContent = strVal
-        }
-
-        // Safe paste fallback for Lexical if execCommand didn't populate text
-        const currentTxt = normalize(target.textContent || "");
-        const expectedSnippet = normalize(strVal).slice(0, 20);
-        if (expectedSnippet && !currentTxt.includes(expectedSnippet)) {
-          try {
-            const DT = (win && win.DataTransfer) || (typeof DataTransfer !== "undefined" ? DataTransfer : null);
-            const ClipEvt = (win && win.ClipboardEvent) || (typeof ClipboardEvent !== "undefined" ? ClipboardEvent : null);
-            if (DT && ClipEvt && target.isConnected) {
-              const dt = new DT();
-              dt.setData("text/plain", strVal);
-              const pasteEvt = new ClipEvt("paste", {
-                bubbles: true,
-                cancelable: true,
-                clipboardData: dt
-              });
-              target.dispatchEvent(pasteEvt);
-            }
-          } catch (_err) {
-            // ignore
+          if (hasExistingText) {
+            ownerDoc.execCommand("selectAll", false, null);
           }
+          ownerDoc.execCommand("insertText", false, strVal);
+          return true;
+        } catch (_err) {
+          // Never wipe React/Lexical child nodes via target.textContent = strVal
+          return false;
         }
-        return true;
       }
 
       // Mock/non-browser DOM fallback (where execCommand is unavailable)
@@ -604,6 +633,8 @@
     MONTHS_ID,
     cleanVideoTitle,
     formatDateForInput,
+    focusDescriptionField,
+    isMetaErrorPage,
     setNativeInputValue,
     findComposerRows,
     findRowDescriptionField,

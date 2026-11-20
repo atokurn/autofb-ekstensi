@@ -501,7 +501,7 @@ test("setNativeInputValue safely handles Lexical contenteditable, detached nodes
     }
     return true;
   };
-  doc.createRange = () => ({ selectNodeContents() {} });
+  doc.createRange = () => ({ selectNodeContents() {}, collapse() {} });
   doc.defaultView.getSelection = () => ({
     removeAllRanges() {},
     addRange() {
@@ -509,11 +509,24 @@ test("setNativeInputValue safely handles Lexical contenteditable, detached nodes
     }
   });
 
+  // Empty editor: inserts directly without selectAll
   const ok = cdom.setNativeInputValue(outerWrapper, "Judul Episode 1", doc);
   assert.equal(ok, true);
   assert.equal(innerEditable.children.length, 1);
   assert.equal(lexicalChild.textContent, "Judul Episode 1");
-  assert.deepEqual(commands, [["selectAll", null], ["insertText", "Judul Episode 1"]]);
+  assert.deepEqual(commands, [["insertText", "Judul Episode 1"]]);
+
+  // Pre-filled editor: runs selectAll then insertText
+  commands.length = 0;
+  assert.equal(cdom.setNativeInputValue(innerEditable, "Judul Episode 2", doc), true);
+  assert.deepEqual(commands, [["selectAll", null], ["insertText", "Judul Episode 2"]]);
+
+  // Non-editable role="textbox" without inner editable must NOT run execCommand in real browser mode
+  const fakeBox = doc.createElement("div", { role: "textbox" });
+  row.appendChild(fakeBox);
+  commands.length = 0;
+  assert.equal(cdom.setNativeInputValue(fakeBox, "ShouldSkip", doc), false);
+  assert.equal(commands.length, 0);
 
   // Detached element must return false without throwing
   row.remove();

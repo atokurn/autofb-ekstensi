@@ -606,18 +606,46 @@
             });
 
             if (row.descriptionEl && row.descriptionEl.isConnected) {
-              const okDesc = cdom.setNativeInputValue(row.descriptionEl, descText, doc);
+              const focusedEl = typeof cdom.focusDescriptionField === "function"
+                ? cdom.focusDescriptionField(row.descriptionEl, doc)
+                : row.descriptionEl;
+              if (!(await smartSleep(120, token))) break;
+
+              if (typeof cdom.isMetaErrorPage === "function" && cdom.isMetaErrorPage(doc)) {
+                state.status = "error";
+                state.lastError = "Halaman Meta menampilkan layar error setelah fokus deskripsi.";
+                addLog(state.lastError, "error");
+                emit();
+                return;
+              }
+
+              // Re-check descriptionEl in case React swapped placeholder on focus
+              latestRows = cdom.findComposerRows(doc);
+              const refreshedRow = latestRows.find((r) => r.domIndex === targetRows[i].domIndex);
+              const descTarget = (refreshedRow && refreshedRow.descriptionEl && refreshedRow.descriptionEl.isConnected)
+                ? refreshedRow.descriptionEl
+                : ((focusedEl && focusedEl.isConnected) ? focusedEl : row.descriptionEl);
+
+              const okDesc = cdom.setNativeInputValue(descTarget, descText, doc);
               if (okDesc) {
                 addLog(`[#${i + 1}] Deskripsi diisi: "${descText.slice(0, 45)}${descText.length > 45 ? "..." : ""}"`, "info");
               } else {
                 rowHadError = true;
-                addLog(`[#${i + 1}] Gagal mengisi kolom deskripsi (elemen terlepas).`, "warn");
+                addLog(`[#${i + 1}] Gagal mengisi kolom deskripsi (elemen tidak aktif/terlepas).`, "warn");
               }
             } else {
               rowHadError = true;
               addLog(`[#${i + 1}] Kolom deskripsi tidak ditemukan.`, "warn");
             }
             if (!(await smartSleep(config.stepDelayMs, token))) break;
+          }
+
+          if (typeof cdom.isMetaErrorPage === "function" && cdom.isMetaErrorPage(doc)) {
+            state.status = "error";
+            state.lastError = "Halaman Meta menampilkan layar error. Proses dihentikan.";
+            addLog(state.lastError, "error");
+            emit();
+            return;
           }
 
           // Refresh row references after description update in case React re-rendered the row
