@@ -111,6 +111,15 @@
     );
   }
 
+  function findEditableLeafNode(target) {
+    if (!target || typeof target.querySelector !== "function") return target;
+    const leaf = target.querySelector('[data-text="true"], span[data-offset-key], p');
+    if (leaf && leaf.isConnected) return leaf;
+    const block = target.querySelector('[data-block="true"]');
+    if (block && block.isConnected) return block;
+    return target;
+  }
+
   function setNativeInputValue(el, value, doc) {
     const target = resolveEditableTarget(el);
     if (!target || !target.isConnected) return false;
@@ -165,7 +174,7 @@
           }
           if (!target.isConnected) return false;
 
-          // Ensure focus is actually inside target before running execCommand (never selectAll on document!)
+          // Ensure focus is actually inside target before touching selection/input
           const active = ownerDoc.activeElement;
           const focusInside = !active || active === target ||
             (typeof target.contains === "function" && target.contains(active));
@@ -173,30 +182,61 @@
             return false;
           }
 
-          const hasExistingText = normalize(target.textContent || "").length > 0;
+          // Preserve natural selection if already inside target; otherwise place caret inside deepest leaf
           if (win && typeof win.getSelection === "function" && typeof ownerDoc.createRange === "function") {
             const sel = win.getSelection();
-            const range = ownerDoc.createRange();
-            const innerNode = target.querySelector ? (target.querySelector("p, div") || target) : target;
-            if (innerNode && innerNode.isConnected) {
-              range.selectNodeContents(innerNode);
-              if (!hasExistingText) {
-                range.collapse(true);
-              }
-              if (range.startContainer && range.startContainer.isConnected && sel) {
-                sel.removeAllRanges();
-                sel.addRange(range);
+            const alreadyInside = sel && sel.rangeCount > 0 && sel.anchorNode &&
+              (sel.anchorNode === target || (typeof target.contains === "function" && target.contains(sel.anchorNode)));
+            if (!alreadyInside && sel) {
+              const leafNode = findEditableLeafNode(target);
+              if (leafNode && leafNode.isConnected) {
+                const range = ownerDoc.createRange();
+                range.selectNodeContents(leafNode);
+                range.collapse(false);
+                if (range.startContainer && range.startContainer.isConnected) {
+                  sel.removeAllRanges();
+                  sel.addRange(range);
+                }
               }
             }
           }
 
-          if (hasExistingText) {
-            ownerDoc.execCommand("selectAll", false, null);
+          // 1. Try Lexical-friendly InputEvent("beforeinput") first (no direct DOM mutation if editor handles it)
+          const InputEvtCtor = (win && win.InputEvent) || (typeof InputEvent !== "undefined" ? InputEvent : null);
+          if (InputEvtCtor && typeof target.dispatchEvent === "function") {
+            const biEvt = new InputEvtCtor("beforeinput", {
+              bubbles: true,
+              cancelable: true,
+              inputType: "insertText",
+              data: strVal
+            });
+            const dispatchOk = target.dispatchEvent(biEvt);
+            if (dispatchOk === false || biEvt.defaultPrevented) {
+              return true;
+            }
           }
+
+          // 2. Try Draft.js-friendly TextEvent("textInput")
+          if (typeof ownerDoc.createEvent === "function" && typeof target.dispatchEvent === "function") {
+            try {
+              const textEvt = ownerDoc.createEvent("TextEvent");
+              if (textEvt && typeof textEvt.initTextEvent === "function") {
+                textEvt.initTextEvent("textInput", true, true, win, strVal);
+                const dispatchOk = target.dispatchEvent(textEvt);
+                if (dispatchOk === false || textEvt.defaultPrevented) {
+                  return true;
+                }
+              }
+            } catch (_textEvtErr) {
+              // ignore if TextEvent unsupported
+            }
+          }
+
+          // 3. Fallback: execCommand insertText (without selectAll so React nodes are not wiped)
           ownerDoc.execCommand("insertText", false, strVal);
           return true;
         } catch (_err) {
-          // Never wipe React/Lexical child nodes via target.textContent = strVal
+          // Never wipe React/Lexical/Draft child nodes via target.textContent = strVal
           return false;
         }
       }
@@ -616,6 +656,18 @@
     return null;
   }
 
+  function describeFieldType(el) {
+    if (!el) return "-";
+    const tag = el.tagName || "?";
+    if (tag === "TEXTAREA" || tag === "INPUT") return tag;
+    if (el.getAttribute && el.getAttribute("data-lexical-editor") === "true") return `${tag} (Lexical)`;
+    if (el.querySelector && el.querySelector("[data-contents], [data-offset-key]")) return `${tag} (Draft.js)`;
+    if (el.isContentEditable || (el.getAttribute && el.getAttribute("contenteditable") === "true")) {
+      return `${tag} (ContentEditable)`;
+    }
+    return `${tag} (${el.getAttribute ? (el.getAttribute("role") || "other") : "other"})`;
+  }
+
   function inspectComposerDiagnostics(doc) {
     const documentRef = doc || document;
     const rows = findComposerRows(documentRef);
@@ -624,7 +676,8 @@
       withDescriptionCount: rows.filter((r) => Boolean(r.descriptionEl)).length,
       withScheduleCount: rows.filter((r) => Boolean(r.scheduleBtn)).length,
       withMoreEditCount: rows.filter((r) => Boolean(r.moreEditBtn)).length,
-      topVideoTitle: rows[0] ? rows[0].videoTitle : null
+      topVideoTitle: rows[0] ? rows[0].videoTitle : null,
+      topDescriptionType: rows[0] ? describeFieldType(rows[0].descriptionEl) : null
     };
   }
 

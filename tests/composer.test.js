@@ -125,6 +125,7 @@ class MockElement {
   dispatchEvent(evt) {
     const list = this._listeners[evt.type] || [];
     for (const fn of list) fn(evt);
+    return !evt.defaultPrevented;
   }
 
   click() {
@@ -509,17 +510,32 @@ test("setNativeInputValue safely handles Lexical contenteditable, detached nodes
     }
   });
 
-  // Empty editor: inserts directly without selectAll
+  // Fallback execCommand inserts text without selectAll (never wiping React child nodes)
   const ok = cdom.setNativeInputValue(outerWrapper, "Judul Episode 1", doc);
   assert.equal(ok, true);
   assert.equal(innerEditable.children.length, 1);
   assert.equal(lexicalChild.textContent, "Judul Episode 1");
   assert.deepEqual(commands, [["insertText", "Judul Episode 1"]]);
 
-  // Pre-filled editor: runs selectAll then insertText
+  // When Lexical handles beforeinput via preventDefault(), execCommand must NOT be called
   commands.length = 0;
+  doc.defaultView.InputEvent = class {
+    constructor(type, opts) {
+      this.type = type;
+      this.data = opts.data;
+      this.defaultPrevented = false;
+    }
+    preventDefault() {
+      this.defaultPrevented = true;
+    }
+  };
+  innerEditable.addEventListener("beforeinput", (evt) => {
+    evt.preventDefault();
+    lexicalChild.textContent = evt.data;
+  });
   assert.equal(cdom.setNativeInputValue(innerEditable, "Judul Episode 2", doc), true);
-  assert.deepEqual(commands, [["selectAll", null], ["insertText", "Judul Episode 2"]]);
+  assert.equal(lexicalChild.textContent, "Judul Episode 2");
+  assert.equal(commands.length, 0);
 
   // Non-editable role="textbox" without inner editable must NOT run execCommand in real browser mode
   const fakeBox = doc.createElement("div", { role: "textbox" });

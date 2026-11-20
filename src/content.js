@@ -1325,7 +1325,7 @@
     els.cDiagBox.textContent = "";
     [
       `• Video terdeteksi: ${info.rowCount} baris`,
-      `• Kolom Deskripsi: ${info.withDescriptionCount} baris`,
+      `• Kolom Deskripsi: ${info.withDescriptionCount} baris (${info.topDescriptionType || "-"})`,
       `• Tombol Jadwal: ${info.withScheduleCount} baris`,
       `• Tombol More edit options: ${info.withMoreEditCount} baris`,
       `• Video #1: ${info.topVideoTitle || "-"}`
