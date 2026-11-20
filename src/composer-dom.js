@@ -266,7 +266,7 @@
     return String(n).padStart(2, "0");
   }
 
-  function formatDateForInput(dateObj, sampleValue, inputType) {
+  function formatDateForInput(dateObj, sampleValue, inputType, preferDmy) {
     const d = dateObj instanceof Date ? dateObj : new Date(dateObj);
     const yyyy = d.getFullYear();
     const mm = pad2(d.getMonth() + 1);
@@ -279,9 +279,15 @@
 
     const sample = String(sampleValue || "").trim();
     if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(sample)) {
-      // Heuristic: if first part > 12 it's DD/MM/YYYY, else default MM/DD/YYYY (Meta US default)
       const first = parseInt(sample.split("/")[0], 10);
-      return first > 12 ? `${dd}/${mm}/${yyyy}` : `${mm}/${dd}/${yyyy}`;
+      const second = parseInt(sample.split("/")[1], 10);
+      if (first > 12) return `${dd}/${mm}/${yyyy}`;
+      if (second > 12) return `${mm}/${dd}/${yyyy}`;
+      return preferDmy ? `${dd}/${mm}/${yyyy}` : `${mm}/${dd}/${yyyy}`;
+    }
+
+    if (/dd\/mm\/yyyy|hh\/bb\/tttt/i.test(sample)) {
+      return `${dd}/${mm}/${yyyy}`;
     }
 
     if (/^\d{1,2}\s+[A-Za-z]+\s+\d{4}$/.test(sample)) {
@@ -310,8 +316,7 @@
       return `${monthName} ${dayNum}, ${yyyy}`;
     }
 
-    // Default Meta Business Suite format shown in screenshot: "20 November 2026"
-    return `${dayNum} ${MONTHS_EN[d.getMonth()]} ${yyyy}`;
+    return preferDmy ? `${dd}/${mm}/${yyyy}` : `${dayNum} ${MONTHS_EN[d.getMonth()]} ${yyyy}`;
   }
 
   function cleanVideoTitle(raw) {
@@ -510,10 +515,40 @@
     return null;
   }
 
+  function isIndonesianPopover(container) {
+    if (!container) return false;
+    const txt = normalize(container.textContent || "");
+    return txt.includes("jadwal") || txt.includes("perbarui") || txt.includes("terbitkan");
+  }
+
+  function isFieldVisibleOrLabelVisible(el, doc) {
+    if (!el || !el.isConnected || isOwn(el)) return false;
+    if (isVisible(el, doc)) return true;
+    const lbl = typeof el.closest === "function" ? el.closest("label") : null;
+    return Boolean(lbl && isVisible(lbl, doc));
+  }
+
   function classifyScheduleInputs(container, doc) {
-    const inputs = Array.from(
+    const raw = Array.from(
       container.querySelectorAll('input, [role="spinbutton"]')
-    ).filter((el) => isVisible(el, doc) && !isOwn(el));
+    ).filter((el) => {
+      if (!isFieldVisibleOrLabelVisible(el, doc)) return false;
+      const type = (el.getAttribute("type") || "").toLowerCase();
+      if (type === "radio" || type === "checkbox" || type === "hidden" || type === "submit" || type === "button") {
+        return false;
+      }
+      if (el.disabled || el.getAttribute("aria-disabled") === "true") return false;
+      return true;
+    });
+
+    // Deduplicate if a spinbutton wraps an input
+    const inputs = [];
+    for (const el of raw) {
+      if (el.getAttribute("role") === "spinbutton" && el.tagName !== "INPUT" && el.querySelector && el.querySelector("input")) {
+        continue;
+      }
+      inputs.push(el);
+    }
 
     let dateInput = null;
     const timeInputs = [];
@@ -521,12 +556,18 @@
     for (const inp of inputs) {
       const type = (inp.getAttribute("type") || "").toLowerCase();
       const val = String(inp.value || inp.textContent || "").trim();
-      const aria = normalize((inp.getAttribute("aria-label") || "") + " " + (inp.getAttribute("placeholder") || ""));
+      const parentLabel = typeof inp.closest === "function" ? inp.closest("label") : null;
+      const aria = normalize(
+        (inp.getAttribute("aria-label") || "") + " " +
+        (inp.getAttribute("placeholder") || "") + " " +
+        (parentLabel ? (parentLabel.getAttribute("aria-label") || "") : "")
+      );
 
       if (
         type === "date" ||
         aria.includes("date") ||
         aria.includes("tanggal") ||
+        /dd\/mm\/yyyy|mm\/dd\/yyyy|hh\/bb\/tttt/i.test(aria) ||
         /\d{4}/.test(val) ||
         /[A-Za-z]{3,}/.test(val) ||
         /\d{1,2}\/\d{1,2}\/\d{4}/.test(val)
@@ -539,6 +580,7 @@
       if (
         type === "time" ||
         type === "number" ||
+        type === "tel" ||
         aria.includes("hour") ||
         aria.includes("jam") ||
         aria.includes("minute") ||
@@ -550,8 +592,7 @@
         inp.getAttribute("role") === "spinbutton"
       ) {
         timeInputs.push(inp);
-      } else if (dateInput && type === "text") {
-        // Remaining text input inside schedule popover after dateInput is likely time
+      } else if (dateInput && (type === "text" || type === "")) {
         timeInputs.push(inp);
       }
     }
@@ -561,36 +602,161 @@
       dateInput = inputs[0];
       return {
         dateInput,
-        timeInputs: inputs.slice(1)
+        timeInputs: inputs.slice(1),
+        amPmControl: findAmPmControl(container, doc)
       };
     }
 
-    return { dateInput, timeInputs };
+    return {
+      dateInput,
+      timeInputs,
+      amPmControl: findAmPmControl(container, doc)
+    };
+  }
+
+  function findAmPmControl(container, doc) {
+    const btns = Array.from(container.querySelectorAll('button, [role="button"], select')).filter((el) =>
+      isVisible(el, doc)
+    );
+    return btns.find((el) => {
+      const lbl = normalize(el.innerText || el.textContent || el.value || "");
+      return lbl === "am" || lbl === "pm";
+    }) || null;
+  }
+
+  function commitScheduleInput(el, value, doc, pressEnter) {
+    if (!el || !el.isConnected) return false;
+    const ownerDoc = el.ownerDocument || doc || (typeof document !== "undefined" ? document : null);
+    const win = getDocView(ownerDoc);
+    const strVal = String(value == null ? "" : value);
+
+    const parentLbl = typeof el.closest === "function" ? el.closest("label") : null;
+    if (parentLbl && typeof parentLbl.click === "function") {
+      parentLbl.click();
+    } else if (typeof el.click === "function") {
+      el.click();
+    }
+    if (typeof el.focus === "function") {
+      el.focus();
+    }
+
+    if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
+      if (typeof el.select === "function") {
+        try {
+          el.select();
+        } catch (_err) {
+          // ignore
+        }
+      }
+
+      if (ownerDoc && typeof ownerDoc.execCommand === "function") {
+        try {
+          ownerDoc.execCommand("selectAll", false, null);
+          ownerDoc.execCommand("insertText", false, strVal);
+        } catch (_err) {
+          // fallback below
+        }
+      }
+
+      if (el.value !== strVal) {
+        const proto = el.tagName === "TEXTAREA"
+          ? (win && win.HTMLTextAreaElement ? win.HTMLTextAreaElement.prototype : null)
+          : (win && win.HTMLInputElement ? win.HTMLInputElement.prototype : null);
+        const descriptor = proto ? Object.getOwnPropertyDescriptor(proto, "value") : null;
+        if (descriptor && typeof descriptor.set === "function") {
+          descriptor.set.call(el, strVal);
+        } else {
+          el.value = strVal;
+        }
+
+        const InputEvt = (win && win.InputEvent) || (typeof InputEvent !== "undefined" ? InputEvent : null);
+        const EventCtor = (win && win.Event) || (typeof Event !== "undefined" ? Event : null);
+        if (InputEvt && typeof el.dispatchEvent === "function") {
+          el.dispatchEvent(new InputEvt("input", { bubbles: true, inputType: "insertText", data: strVal }));
+        } else if (EventCtor && typeof el.dispatchEvent === "function") {
+          el.dispatchEvent(new EventCtor("input", { bubbles: true }));
+        }
+        if (EventCtor && typeof el.dispatchEvent === "function") {
+          el.dispatchEvent(new EventCtor("change", { bubbles: true }));
+        }
+      }
+
+      if (pressEnter) {
+        const KeyEvt = (win && win.KeyboardEvent) || (typeof KeyboardEvent !== "undefined" ? KeyboardEvent : null);
+        if (KeyEvt && typeof el.dispatchEvent === "function") {
+          el.dispatchEvent(new KeyEvt("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+          el.dispatchEvent(new KeyEvt("keyup", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+        }
+      }
+
+      const EventCtor = (win && win.Event) || (typeof Event !== "undefined" ? Event : null);
+      if (EventCtor && typeof el.dispatchEvent === "function") {
+        el.dispatchEvent(new EventCtor("blur", { bubbles: true }));
+      }
+      return true;
+    }
+
+    // Non-input spinbutton or contenteditable
+    if (el.isContentEditable || (el.getAttribute && el.getAttribute("contenteditable") === "true")) {
+      return setNativeInputValue(el, strVal, ownerDoc);
+    }
+
+    const KeyEvt = (win && win.KeyboardEvent) || (typeof KeyboardEvent !== "undefined" ? KeyboardEvent : null);
+    if (KeyEvt && typeof el.dispatchEvent === "function") {
+      for (const ch of strVal) {
+        el.dispatchEvent(new KeyEvt("keydown", { key: ch, bubbles: true }));
+        el.dispatchEvent(new KeyEvt("keypress", { key: ch, bubbles: true }));
+        el.dispatchEvent(new KeyEvt("keyup", { key: ch, bubbles: true }));
+      }
+      return true;
+    }
+    return false;
   }
 
   function setScheduleInputsInPopover(popover, dateObj, doc) {
     const { container } = popover;
-    const { dateInput, timeInputs } = classifyScheduleInputs(container, doc);
+    const { dateInput, timeInputs, amPmControl } = classifyScheduleInputs(container, doc);
 
     if (!dateInput && timeInputs.length === 0) {
       return { ok: false, reason: "Input tanggal/jam pada popover jadwal tidak ditemukan." };
     }
 
+    const preferDmy = isIndonesianPopover(container);
+
     if (dateInput) {
       const sample = dateInput.value || dateInput.getAttribute("placeholder") || "";
-      const formattedDate = formatDateForInput(dateObj, sample, (dateInput.getAttribute("type") || "").toLowerCase());
-      setNativeInputValue(dateInput, formattedDate, doc);
+      const formattedDate = formatDateForInput(
+        dateObj,
+        sample,
+        (dateInput.getAttribute("type") || "").toLowerCase(),
+        preferDmy
+      );
+      commitScheduleInput(dateInput, formattedDate, doc, true);
     }
 
-    const hh = pad2(dateObj.getHours());
+    let hours = dateObj.getHours();
+    if (amPmControl) {
+      const wantPm = hours >= 12;
+      const curLabel = normalize(amPmControl.innerText || amPmControl.textContent || amPmControl.value || "");
+      if ((wantPm && curLabel === "am") || (!wantPm && curLabel === "pm")) {
+        if (amPmControl.tagName === "SELECT") {
+          commitScheduleInput(amPmControl, wantPm ? "PM" : "AM", doc, false);
+        } else if (typeof amPmControl.click === "function") {
+          amPmControl.click();
+        }
+      }
+      hours = hours % 12 || 12;
+    }
+
+    const hh = pad2(hours);
     const min = pad2(dateObj.getMinutes());
 
     if (timeInputs.length >= 2) {
-      // Hour + Minute inputs (e.g. "17" : "03")
-      setNativeInputValue(timeInputs[0], hh, doc);
-      setNativeInputValue(timeInputs[1], min, doc);
+      // Hour + Minute inputs (e.g. "23" : "00")
+      commitScheduleInput(timeInputs[0], hh, doc, false);
+      commitScheduleInput(timeInputs[1], min, doc, true);
     } else if (timeInputs.length === 1) {
-      setNativeInputValue(timeInputs[0], `${hh}:${min}`, doc);
+      commitScheduleInput(timeInputs[0], `${hh}:${min}`, doc, true);
     }
 
     return { ok: true };
@@ -691,10 +857,13 @@
   const api = {
     MONTHS_EN,
     MONTHS_ID,
+    pad2,
     cleanVideoTitle,
     formatDateForInput,
     focusDescriptionField,
     isMetaErrorPage,
+    isIndonesianPopover,
+    commitScheduleInput,
     setNativeInputValue,
     findComposerRows,
     findRowDescriptionField,

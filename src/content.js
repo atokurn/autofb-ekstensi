@@ -1449,9 +1449,20 @@
       els.cEnableCover, els.cCoverMode, els.cLoopCovers,
       els.cStartRow, els.cMaxRows, els.cDelaySec, els.cOnlyChecked
     ].forEach((el) => {
-      el.addEventListener("change", handleComposerConfigChange);
+      el.addEventListener("change", () => {
+        if ((el === els.cStartDate || el === els.cStartTime) && els.cUseLastSched.checked) {
+          els.cUseLastSched.checked = false;
+        }
+        handleComposerConfigChange();
+      });
       if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
-        el.addEventListener("input", renderComposerPreview);
+        el.addEventListener("input", () => {
+          if ((el === els.cStartDate || el === els.cStartTime) && els.cUseLastSched.checked) {
+            els.cUseLastSched.checked = false;
+          }
+          composerEngine.setConfig(readComposerConfigFromInputs());
+          renderComposerPreview();
+        });
       }
     });
 

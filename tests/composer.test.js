@@ -655,3 +655,118 @@ test("Composer handles Indonesian Bulk Upload labels (Terbitkan sekarang -> Jadw
   assert.equal(savedTime, "21:15");
   assert.ok(cdom.findRowMoreEditButton(row, doc));
 });
+
+test("Composer sets 20/11/2026 date, label-wrapped minute input, and rolls date 20 -> 21 past midnight", async () => {
+  const doc = new MockDocument();
+  const table = doc.createElement("div", { role: "table" });
+  doc.body.appendChild(table);
+
+  const results = [];
+  let activePop = null;
+
+  for (let idx = 0; idx < 3; idx++) {
+    const row = doc.createElement("div", { role: "row" });
+    const cb = doc.createElement("input", { type: "checkbox" });
+    cb._rect = { left: 20, top: 120 + idx * 50, width: 18, height: 18 };
+    const titleEl = doc.createElement("span");
+    titleEl.textContent = `Ep ${idx + 1}`;
+    const desc = doc.createElement("textarea");
+    const schedBtn = doc.createElement("button");
+    schedBtn.textContent = "Terbitkan sekarang";
+
+    schedBtn.addEventListener("click", () => {
+      if (activePop) activePop.remove();
+      const pop = doc.createElement("div");
+      const schedTab = doc.createElement("button", { role: "tab" });
+      schedTab.textContent = "Jadwal";
+      const wrap = doc.createElement("div");
+
+      let dateInp = null;
+      let hourInp = null;
+      let minInp = null;
+
+      schedTab.addEventListener("click", () => {
+        if (dateInp) return;
+        // Date input displays "20 November 2026" unfocused, switches to "20/11/2026" on focus (like js_gn)
+        dateInp = doc.createElement("input", { id: "js_gn", type: "text" });
+        dateInp.value = "20 November 2026";
+        dateInp.addEventListener("click", () => {
+          if (dateInp.value === "20 November 2026") dateInp.value = "20/11/2026";
+        });
+
+        hourInp = doc.createElement("input", { id: "js_gv", type: "text", role: "spinbutton" });
+        hourInp.value = "21";
+
+        // Minute input wrapped in visible <label>, with zero-size/hidden input style
+        const minLabel = doc.createElement("label");
+        minLabel._rect = { left: 200, top: 200, width: 40, height: 24 };
+        minInp = doc.createElement("input", { type: "text", role: "spinbutton" });
+        minInp._rect = { left: 200, top: 200, width: 0, height: 0 };
+        minInp.value = "46";
+        minLabel.appendChild(minInp);
+
+        wrap.appendChild(dateInp);
+        wrap.appendChild(hourInp);
+        wrap.appendChild(minLabel);
+      });
+
+      const updateBtn = doc.createElement("button");
+      updateBtn.textContent = "Perbarui";
+      updateBtn.addEventListener("click", () => {
+        results.push({
+          date: dateInp.value,
+          time: `${hourInp.value}:${minInp.value}`
+        });
+        pop.remove();
+        activePop = null;
+      });
+
+      pop.appendChild(schedTab);
+      pop.appendChild(wrap);
+      pop.appendChild(updateBtn);
+      doc.body.appendChild(pop);
+      activePop = pop;
+    });
+
+    row.appendChild(cb);
+    row.appendChild(titleEl);
+    row.appendChild(desc);
+    row.appendChild(schedBtn);
+    table.appendChild(row);
+  }
+
+  let clock = 0;
+  const eng = cengine.createComposerEngine({
+    document: doc,
+    composerDom: cdom,
+    domBase,
+    sleep: (ms) => {
+      clock += Math.max(1, ms || 1);
+      return Promise.resolve();
+    },
+    now: () => clock
+  });
+
+  await eng.start({
+    enableDescription: false,
+    enableSchedule: true,
+    scheduleStartDate: "2026-11-20",
+    scheduleStartTime: "23:30",
+    intervalValue: 30,
+    intervalUnit: "minute",
+    enableCover: false,
+    delayMs: 200,
+    stepDelayMs: 150
+  });
+
+  const snap = eng.getSnapshot();
+  assert.equal(snap.status, "completed");
+  assert.equal(snap.processedCount, 3);
+  assert.deepEqual(results, [
+    { date: "20/11/2026", time: "23:30" },
+    { date: "21/11/2026", time: "00:00" },
+    { date: "21/11/2026", time: "00:30" }
+  ]);
+  // Also confirm DMY ambiguity check (06/11/2026 with preferDmy=true)
+  assert.equal(cdom.formatDateForInput(new Date(2026, 10, 6), "05/11/2026", "text", true), "06/11/2026");
+});

@@ -468,10 +468,75 @@
         return (classified.dateInput || classified.timeInputs.length > 0) ? pop : null;
       }, 2000, 100, token) || cdom.findSchedulePopover(doc) || popover;
 
-      const setRes = cdom.setScheduleInputsInPopover(readyPopover, targetDate, doc);
-      if (!setRes.ok) {
-        closeAnySchedulePopover();
-        return setRes;
+      if (typeof cdom.commitScheduleInput === "function") {
+        const { dateInput, timeInputs, amPmControl } = cdom.classifyScheduleInputs(readyPopover.container, doc);
+        if (!dateInput && timeInputs.length === 0) {
+          closeAnySchedulePopover();
+          return { ok: false, reason: "Input tanggal/jam pada popover jadwal tidak ditemukan." };
+        }
+
+        const preferDmy = typeof cdom.isIndonesianPopover === "function" && cdom.isIndonesianPopover(readyPopover.container);
+
+        if (dateInput && dateInput.isConnected) {
+          // Focus first so Meta's DateInput switches from display text to editable format (e.g. 20/11/2026)
+          if (typeof dateInput.click === "function") dateInput.click();
+          if (typeof dateInput.focus === "function") dateInput.focus();
+          if (!(await smartSleep(80, token))) return { ok: false, aborted: true };
+
+          const sample = dateInput.value || dateInput.getAttribute("placeholder") || "";
+          const dmyStr = `${pad2(targetDate.getDate())}/${pad2(targetDate.getMonth() + 1)}/${targetDate.getFullYear()}`;
+          const formattedDate = preferDmy && (!sample || /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(sample))
+            ? dmyStr
+            : cdom.formatDateForInput(
+                targetDate,
+                sample,
+                (dateInput.getAttribute("type") || "").toLowerCase(),
+                preferDmy
+              );
+
+          cdom.commitScheduleInput(dateInput, formattedDate, doc, true);
+          if (!(await smartSleep(100, token))) return { ok: false, aborted: true };
+
+          // If DateInput reverted or ignored month-name format, fallback to DD/MM/YYYY (20/11/2026)
+          const curDateVal = String(dateInput.value || "").trim();
+          const targetDayStr = String(targetDate.getDate());
+          if (preferDmy && formattedDate !== dmyStr && !curDateVal.includes(targetDayStr)) {
+            cdom.commitScheduleInput(dateInput, dmyStr, doc, true);
+            if (!(await smartSleep(100, token))) return { ok: false, aborted: true };
+          }
+        }
+
+        let hours = targetDate.getHours();
+        if (amPmControl) {
+          const wantPm = hours >= 12;
+          const curLabel = String(amPmControl.innerText || amPmControl.textContent || amPmControl.value || "").trim().toLowerCase();
+          if ((wantPm && curLabel === "am") || (!wantPm && curLabel === "pm")) {
+            if (amPmControl.tagName === "SELECT") {
+              cdom.commitScheduleInput(amPmControl, wantPm ? "PM" : "AM", doc, false);
+            } else if (typeof amPmControl.click === "function") {
+              amPmControl.click();
+            }
+            if (!(await smartSleep(60, token))) return { ok: false, aborted: true };
+          }
+          hours = hours % 12 || 12;
+        }
+
+        const hh = pad2(hours);
+        const min = pad2(targetDate.getMinutes());
+
+        if (timeInputs.length >= 2) {
+          cdom.commitScheduleInput(timeInputs[0], hh, doc, false);
+          if (!(await smartSleep(80, token))) return { ok: false, aborted: true };
+          cdom.commitScheduleInput(timeInputs[1], min, doc, true);
+        } else if (timeInputs.length === 1) {
+          cdom.commitScheduleInput(timeInputs[0], `${hh}:${min}`, doc, true);
+        }
+      } else {
+        const setRes = cdom.setScheduleInputsInPopover(readyPopover, targetDate, doc);
+        if (!setRes.ok) {
+          closeAnySchedulePopover();
+          return setRes;
+        }
       }
 
       if (!(await smartSleep(250, token))) return { ok: false, aborted: true };
