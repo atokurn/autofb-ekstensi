@@ -61,59 +61,124 @@
   }
 
   function setNativeInputValue(el, value, doc) {
-    if (!el) return false;
-    const win = getDocView(doc);
+    if (!el || !el.isConnected) return false;
+    const ownerDoc = el.ownerDocument || doc || (typeof document !== "undefined" ? document : null);
+    const win = getDocView(ownerDoc);
     const strVal = String(value == null ? "" : value);
 
-    if (typeof el.focus === "function") {
-      el.focus();
+    // If caller passed a role="textbox" wrapper around a real textarea/contenteditable, unwrap it
+    let target = el;
+    if (
+      target.tagName !== "TEXTAREA" &&
+      target.tagName !== "INPUT" &&
+      target.getAttribute &&
+      target.getAttribute("contenteditable") !== "true" &&
+      !target.isContentEditable &&
+      typeof target.querySelector === "function"
+    ) {
+      const inner = target.querySelector('textarea, input[type="text"], [contenteditable="true"]');
+      if (inner && inner.isConnected) {
+        target = inner;
+      }
     }
 
-    if (el.tagName === "TEXTAREA" || el.tagName === "INPUT") {
-      const proto = el.tagName === "TEXTAREA"
+    if (typeof target.scrollIntoView === "function") {
+      try {
+        target.scrollIntoView({ block: "nearest", inline: "nearest" });
+      } catch (_err) {
+        // ignore
+      }
+    }
+    if (typeof target.focus === "function") {
+      target.focus();
+    }
+    if (!target.isConnected) return false;
+
+    if (target.tagName === "TEXTAREA" || target.tagName === "INPUT") {
+      const proto = target.tagName === "TEXTAREA"
         ? (win && win.HTMLTextAreaElement ? win.HTMLTextAreaElement.prototype : null)
         : (win && win.HTMLInputElement ? win.HTMLInputElement.prototype : null);
       const descriptor = proto ? Object.getOwnPropertyDescriptor(proto, "value") : null;
       if (descriptor && typeof descriptor.set === "function") {
-        descriptor.set.call(el, strVal);
+        descriptor.set.call(target, strVal);
       } else {
-        el.value = strVal;
+        target.value = strVal;
       }
 
       const EventCtor = (win && win.Event) || (typeof Event !== "undefined" ? Event : null);
-      if (EventCtor && typeof el.dispatchEvent === "function") {
-        el.dispatchEvent(new EventCtor("input", { bubbles: true }));
-        el.dispatchEvent(new EventCtor("change", { bubbles: true }));
-        el.dispatchEvent(new EventCtor("blur", { bubbles: true }));
+      if (EventCtor && typeof target.dispatchEvent === "function") {
+        target.dispatchEvent(new EventCtor("input", { bubbles: true }));
+        target.dispatchEvent(new EventCtor("change", { bubbles: true }));
+        target.dispatchEvent(new EventCtor("blur", { bubbles: true }));
       }
       return true;
     }
 
     // ContentEditable / Lexical / Draft.js textbox
-    if (el.getAttribute && (el.getAttribute("contenteditable") === "true" || el.getAttribute("role") === "textbox")) {
-      try {
-        if (win && typeof win.getSelection === "function" && doc.createRange) {
-          const range = doc.createRange();
-          range.selectNodeContents(el);
-          const sel = win.getSelection();
-          sel.removeAllRanges();
-          sel.addRange(range);
+    const isEditable = target.isContentEditable === true ||
+      (target.getAttribute && (target.getAttribute("contenteditable") === "true" || target.getAttribute("role") === "textbox"));
+    if (isEditable) {
+      const hasExecCommand = ownerDoc && typeof ownerDoc.execCommand === "function";
+
+      if (hasExecCommand) {
+        try {
+          if (typeof target.click === "function") {
+            target.click();
+          }
+          if (typeof target.focus === "function") {
+            target.focus();
+          }
+          if (!target.isConnected) return false;
+
+          if (win && typeof win.getSelection === "function" && typeof ownerDoc.createRange === "function") {
+            const range = ownerDoc.createRange();
+            range.selectNodeContents(target);
+            if (range.startContainer && range.startContainer.isConnected) {
+              const sel = win.getSelection();
+              if (sel) {
+                sel.removeAllRanges();
+                sel.addRange(range);
+              }
+            }
+          }
+
+          ownerDoc.execCommand("selectAll", false, null);
+          ownerDoc.execCommand("insertText", false, strVal);
+        } catch (_err) {
+          // Never wipe Lexical/React child nodes via target.textContent = strVal
         }
-        if (typeof doc.execCommand === "function") {
-          doc.execCommand("selectAll", false, null);
-          doc.execCommand("insertText", false, strVal);
-        } else {
-          el.textContent = strVal;
+
+        // Safe paste fallback for Lexical if execCommand didn't populate text
+        const currentTxt = normalize(target.textContent || "");
+        const expectedSnippet = normalize(strVal).slice(0, 20);
+        if (expectedSnippet && !currentTxt.includes(expectedSnippet)) {
+          try {
+            const DT = (win && win.DataTransfer) || (typeof DataTransfer !== "undefined" ? DataTransfer : null);
+            const ClipEvt = (win && win.ClipboardEvent) || (typeof ClipboardEvent !== "undefined" ? ClipboardEvent : null);
+            if (DT && ClipEvt && target.isConnected) {
+              const dt = new DT();
+              dt.setData("text/plain", strVal);
+              const pasteEvt = new ClipEvt("paste", {
+                bubbles: true,
+                cancelable: true,
+                clipboardData: dt
+              });
+              target.dispatchEvent(pasteEvt);
+            }
+          } catch (_err) {
+            // ignore
+          }
         }
-      } catch (_err) {
-        el.textContent = strVal;
+        return true;
       }
 
+      // Mock/non-browser DOM fallback (where execCommand is unavailable)
+      target.textContent = strVal;
       const EventCtor = (win && win.Event) || (typeof Event !== "undefined" ? Event : null);
-      if (EventCtor && typeof el.dispatchEvent === "function") {
-        el.dispatchEvent(new EventCtor("input", { bubbles: true }));
-        el.dispatchEvent(new EventCtor("change", { bubbles: true }));
-        el.dispatchEvent(new EventCtor("blur", { bubbles: true }));
+      if (EventCtor && typeof target.dispatchEvent === "function") {
+        target.dispatchEvent(new EventCtor("input", { bubbles: true }));
+        target.dispatchEvent(new EventCtor("change", { bubbles: true }));
+        target.dispatchEvent(new EventCtor("blur", { bubbles: true }));
       }
       return true;
     }
@@ -182,13 +247,19 @@
 
   function findRowDescriptionField(rowEl, doc) {
     if (!rowEl) return null;
-    const candidates = Array.from(
-      rowEl.querySelectorAll('textarea, [contenteditable="true"], [role="textbox"], input[type="text"]')
-    );
-    for (const el of candidates) {
-      if (!isVisible(el, doc)) continue;
-      if (el.disabled || el.getAttribute("aria-disabled") === "true") continue;
-      return el;
+    const selectors = [
+      "textarea",
+      '[contenteditable="true"]',
+      'input[type="text"]',
+      '[role="textbox"]'
+    ];
+    for (const sel of selectors) {
+      const candidates = Array.from(rowEl.querySelectorAll(sel));
+      for (const el of candidates) {
+        if (!isVisible(el, doc)) continue;
+        if (el.disabled || el.getAttribute("aria-disabled") === "true") continue;
+        return el;
+      }
     }
     return null;
   }
@@ -327,7 +398,7 @@
     const documentRef = doc || document;
     // Look for visible button matching "Schedule" / "Jadwalkan" inside a floating container with an "Update"/"Perbarui" button
     const buttons = Array.from(
-      documentRef.querySelectorAll('button, [role="button"], [role="tab"], [role="radio"]')
+      documentRef.querySelectorAll('button, [role="button"], [role="tab"], [role="radio"], label')
     ).filter((el) => isVisible(el, documentRef) && !isOwn(el));
 
     const schedTabs = buttons.filter((el) => {
@@ -338,7 +409,11 @@
     for (let i = schedTabs.length - 1; i >= 0; i--) {
       const tab = schedTabs[i];
       let curr = tab.parentElement;
-      for (let depth = 0; depth < 8 && curr && curr.tagName !== "BODY"; depth++) {
+      for (let depth = 0; depth < 14 && curr && curr.tagName !== "BODY"; depth++) {
+        // Stop before hitting the entire composer table
+        if (curr.querySelectorAll && curr.querySelectorAll('[role="row"]').length > 1) {
+          break;
+        }
         const innerBtns = Array.from(curr.querySelectorAll('button, [role="button"]')).filter((b) =>
           isVisible(b, documentRef)
         );

@@ -473,3 +473,49 @@ test("Composer engine fills description, schedules rows, and uploads covers end-
   assert.equal(rowStates[1].scheduledTime, "12:00");
   assert.equal(rowStates[1].uploadedCover, "cover_2.jpg");
 });
+
+test("setNativeInputValue safely handles Lexical contenteditable, detached nodes, and outer textbox wrappers", () => {
+  const { doc } = createComposerPageSim([]);
+  const row = doc.createElement("div", { role: "row" });
+  const outerWrapper = doc.createElement("div", { role: "textbox" });
+  const placeholderChild = doc.createElement("span");
+  placeholderChild.textContent = "Describe your reel";
+  const innerEditable = doc.createElement("div", { contenteditable: "true" });
+  const lexicalChild = doc.createElement("p");
+  innerEditable.appendChild(lexicalChild);
+  outerWrapper.appendChild(placeholderChild);
+  outerWrapper.appendChild(innerEditable);
+  row.appendChild(outerWrapper);
+  doc.body.appendChild(row);
+
+  // findRowDescriptionField must choose inner [contenteditable="true"] over outer [role="textbox"]
+  const picked = cdom.findRowDescriptionField(row, doc);
+  assert.equal(picked, innerEditable);
+
+  // Simulate browser with execCommand + throwing addRange: must NOT wipe lexicalChild
+  const commands = [];
+  doc.execCommand = (cmd, _ui, val) => {
+    commands.push([cmd, val]);
+    if (cmd === "insertText") {
+      lexicalChild.textContent = val;
+    }
+    return true;
+  };
+  doc.createRange = () => ({ selectNodeContents() {} });
+  doc.defaultView.getSelection = () => ({
+    removeAllRanges() {},
+    addRange() {
+      throw new Error("The given range isn't in document.");
+    }
+  });
+
+  const ok = cdom.setNativeInputValue(outerWrapper, "Judul Episode 1", doc);
+  assert.equal(ok, true);
+  assert.equal(innerEditable.children.length, 1);
+  assert.equal(lexicalChild.textContent, "Judul Episode 1");
+  assert.deepEqual(commands, [["selectAll", null], ["insertText", "Judul Episode 1"]]);
+
+  // Detached element must return false without throwing
+  row.remove();
+  assert.equal(cdom.setNativeInputValue(innerEditable, "X", doc), false);
+});

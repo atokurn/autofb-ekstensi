@@ -570,9 +570,19 @@
         for (let i = 0; i < targetRows.length; i++) {
           if (isAborted(token) || !(await waitWhilePaused(token))) break;
 
-          // Re-query row by domIndex if possible to avoid stale React references
-          const latestRows = cdom.findComposerRows(doc);
-          const row = latestRows.find((r) => r.domIndex === targetRows[i].domIndex) || targetRows[i];
+          // Re-query row by domIndex to avoid stale React references
+          let latestRows = cdom.findComposerRows(doc);
+          let row = latestRows.find((r) => r.domIndex === targetRows[i].domIndex);
+          if (!row && targetRows[i].rowEl && targetRows[i].rowEl.isConnected) {
+            row = targetRows[i];
+          }
+          if (!row || !row.rowEl || !row.rowEl.isConnected) {
+            state.status = "error";
+            state.lastError = "Halaman Bulk Upload berubah atau gagal dimuat. Silakan refresh halaman.";
+            addLog(state.lastError, "error");
+            emit();
+            return;
+          }
 
           const cleanName = formatReadableTitle(row.videoTitle, config.cleanVideoUnderscores);
           const epNum = config.episodeMode === "filename"
@@ -595,14 +605,30 @@
               scheduledDate: targetDate
             });
 
-            if (row.descriptionEl) {
-              cdom.setNativeInputValue(row.descriptionEl, descText, doc);
-              addLog(`[#${i + 1}] Deskripsi diisi: "${descText.slice(0, 45)}${descText.length > 45 ? "..." : ""}"`, "info");
+            if (row.descriptionEl && row.descriptionEl.isConnected) {
+              const okDesc = cdom.setNativeInputValue(row.descriptionEl, descText, doc);
+              if (okDesc) {
+                addLog(`[#${i + 1}] Deskripsi diisi: "${descText.slice(0, 45)}${descText.length > 45 ? "..." : ""}"`, "info");
+              } else {
+                rowHadError = true;
+                addLog(`[#${i + 1}] Gagal mengisi kolom deskripsi (elemen terlepas).`, "warn");
+              }
             } else {
               rowHadError = true;
               addLog(`[#${i + 1}] Kolom deskripsi tidak ditemukan.`, "warn");
             }
             if (!(await smartSleep(config.stepDelayMs, token))) break;
+          }
+
+          // Refresh row references after description update in case React re-rendered the row
+          latestRows = cdom.findComposerRows(doc);
+          row = latestRows.find((r) => r.domIndex === targetRows[i].domIndex) || row;
+          if (!row || !row.rowEl || !row.rowEl.isConnected) {
+            state.status = "error";
+            state.lastError = "Halaman Bulk Upload berubah setelah mengisi deskripsi. Silakan refresh halaman.";
+            addLog(state.lastError, "error");
+            emit();
+            return;
           }
 
           // 2. Schedule
@@ -624,6 +650,10 @@
             }
             if (!(await smartSleep(config.stepDelayMs, token))) break;
           }
+
+          // Refresh row references again before opening More edit modal
+          latestRows = cdom.findComposerRows(doc);
+          row = latestRows.find((r) => r.domIndex === targetRows[i].domIndex) || row;
 
           // 3. Cover Image (optional)
           if (config.enableCover) {
