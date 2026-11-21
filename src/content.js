@@ -35,20 +35,38 @@
     floatingBottom: 18
   };
 
+  function hasValidRuntime() {
+    try {
+      return Boolean(typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.id);
+    } catch (_err) {
+      return false;
+    }
+  }
+
   function getSavedState(key, cb) {
-    if (!chrome || !chrome.storage || !chrome.storage.local) {
+    if (!hasValidRuntime() || !chrome.storage || !chrome.storage.local) {
       cb({});
       return;
     }
-    chrome.storage.local.get([key], (res) => {
-      cb((res && res[key]) || {});
-    });
+    try {
+      chrome.storage.local.get([key], (res) => {
+        if (!hasValidRuntime()) return;
+        cb((res && res[key]) || {});
+      });
+    } catch (_err) {
+      cb({});
+    }
   }
 
   function saveState(key, partial) {
-    if (!chrome || !chrome.storage || !chrome.storage.local) return;
+    if (!hasValidRuntime() || !chrome.storage || !chrome.storage.local) return;
     getSavedState(key, (curr) => {
-      chrome.storage.local.set({ [key]: Object.assign({}, curr, partial) });
+      if (!hasValidRuntime()) return;
+      try {
+        chrome.storage.local.set({ [key]: Object.assign({}, curr, partial) });
+      } catch (_err) {
+        // ignore invalidated context after extension reload
+      }
     });
   }
 
@@ -76,6 +94,7 @@
   });
 
   function notifyBadge(snapshot, kind) {
+    if (!hasValidRuntime()) return;
     try {
       const payload = kind === "composer"
         ? {
