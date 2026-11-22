@@ -495,26 +495,37 @@
               );
 
           cdom.commitScheduleInput(dateInput, formattedDate, doc, true);
-          if (!(await smartSleep(100, token))) return { ok: false, aborted: true };
+          if (!(await smartSleep(120, token))) return { ok: false, aborted: true };
 
           // If DateInput reverted or ignored month-name format, fallback to DD/MM/YYYY (20/11/2026)
           const curDateVal = String(dateInput.value || "").trim();
           const targetDayStr = String(targetDate.getDate());
           if (preferDmy && formattedDate !== dmyStr && !curDateVal.includes(targetDayStr)) {
             cdom.commitScheduleInput(dateInput, dmyStr, doc, true);
-            if (!(await smartSleep(100, token))) return { ok: false, aborted: true };
+            if (!(await smartSleep(120, token))) return { ok: false, aborted: true };
           }
         }
 
+        const win = (doc && doc.defaultView) || (typeof window !== "undefined" ? window : null);
+
+        const refreshClassified = () => {
+          const pop = cdom.findSchedulePopover(doc) || readyPopover;
+          return cdom.classifyScheduleInputs(pop.container, doc);
+        };
+
+        const activeAfterDate = refreshClassified();
+        const curAmPm = activeAfterDate.amPmControl || amPmControl;
+        let curTimeInputs = activeAfterDate.timeInputs.length > 0 ? activeAfterDate.timeInputs : timeInputs;
+
         let hours = targetDate.getHours();
-        if (amPmControl) {
+        if (curAmPm) {
           const wantPm = hours >= 12;
-          const curLabel = String(amPmControl.innerText || amPmControl.textContent || amPmControl.value || "").trim().toLowerCase();
+          const curLabel = String(curAmPm.innerText || curAmPm.textContent || curAmPm.value || "").trim().toLowerCase();
           if ((wantPm && curLabel === "am") || (!wantPm && curLabel === "pm")) {
-            if (amPmControl.tagName === "SELECT") {
-              cdom.commitScheduleInput(amPmControl, wantPm ? "PM" : "AM", doc, false);
-            } else if (typeof amPmControl.click === "function") {
-              amPmControl.click();
+            if (curAmPm.tagName === "SELECT") {
+              cdom.commitScheduleInput(curAmPm, wantPm ? "PM" : "AM", doc, false);
+            } else if (typeof curAmPm.click === "function") {
+              curAmPm.click();
             }
             if (!(await smartSleep(60, token))) return { ok: false, aborted: true };
           }
@@ -522,14 +533,117 @@
         }
 
         const hh = pad2(hours);
-        const min = pad2(targetDate.getMinutes());
+        const mins = targetDate.getMinutes();
+        const min = pad2(mins);
 
-        if (timeInputs.length >= 2) {
-          cdom.commitScheduleInput(timeInputs[0], hh, doc, false);
+        async function finishInputEdit(inp, pressEnter) {
+          if (pressEnter && typeof cdom.dispatchKeyEvent === "function") {
+            cdom.dispatchKeyEvent(inp, win, "keydown", "Enter");
+            cdom.dispatchKeyEvent(inp, win, "keyup", "Enter");
+          }
+          const EventCtor = (win && win.Event) || (typeof Event !== "undefined" ? Event : null);
+          if (EventCtor && typeof inp.dispatchEvent === "function") {
+            inp.dispatchEvent(new EventCtor("blur", { bubbles: true }));
+            inp.dispatchEvent(new EventCtor("focusout", { bubbles: true }));
+          }
+          return smartSleep(50, token);
+        }
+
+        function focusInputEl(inp) {
+          if (typeof cdom.focusScheduleField === "function") {
+            cdom.focusScheduleField(inp, doc);
+          } else {
+            if (typeof inp.click === "function") inp.click();
+            if (typeof inp.focus === "function") inp.focus();
+          }
+        }
+
+        async function applyTimeSegment(inp, targetNum, formattedStr, pressEnter) {
+          if (!inp || !inp.isConnected) return { ok: false, reason: "Input jam/menit tidak aktif." };
+
+          focusInputEl(inp);
+          if (!(await smartSleep(50, token))) return { ok: false, aborted: true };
+
+          cdom.commitScheduleInput(inp, formattedStr, doc, pressEnter);
+          if (!(await smartSleep(60, token))) return { ok: false, aborted: true };
+
+          if (typeof cdom.readSpinbuttonNumber !== "function") {
+            return { ok: true };
+          }
+
+          let actual = cdom.readSpinbuttonNumber(inp, doc);
+          if (actual === null || actual === targetNum) {
+            return { ok: true };
+          }
+
+          // Retry A: Re-focus and push value via native setter + input/change + blur
+          focusInputEl(inp);
+          if (!(await smartSleep(40, token))) return { ok: false, aborted: true };
+
+          if (typeof cdom.setInputViaNativeSetter === "function" && (inp.tagName === "INPUT" || inp.tagName === "TEXTAREA")) {
+            cdom.setInputViaNativeSetter(inp, formattedStr, win, "insertText", formattedStr);
+            if (!(await smartSleep(40, token))) return { ok: false, aborted: true };
+            if (!(await finishInputEdit(inp, pressEnter))) return { ok: false, aborted: true };
+          }
+
+          actual = cdom.readSpinbuttonNumber(inp, doc);
+          if (actual === null || actual === targetNum) {
+            return { ok: true };
+          }
+
+          // Retry B: Step via ArrowUp / ArrowDown with short async waits between ticks
+          if (typeof cdom.dispatchKeyEvent === "function") {
+            focusInputEl(inp);
+            if (!(await smartSleep(40, token))) return { ok: false, aborted: true };
+
+            let cur = cdom.readSpinbuttonNumber(inp, doc);
+            for (let step = 0; step < 65; step++) {
+              if (cur === null || cur === targetNum) break;
+              const arrowKey = targetNum > cur ? "ArrowUp" : "ArrowDown";
+              cdom.dispatchKeyEvent(inp, win, "keydown", arrowKey);
+              cdom.dispatchKeyEvent(inp, win, "keyup", arrowKey);
+              if (!(await smartSleep(15, token))) return { ok: false, aborted: true };
+              const next = cdom.readSpinbuttonNumber(inp, doc);
+              if (next === null || next === cur) break;
+              cur = next;
+            }
+            if (!(await finishInputEdit(inp, pressEnter))) return { ok: false, aborted: true };
+            actual = cdom.readSpinbuttonNumber(inp, doc);
+          }
+
+          if (actual !== null && actual !== targetNum) {
+            return { ok: false, actual };
+          }
+          return { ok: true };
+        }
+
+        if (curTimeInputs.length === 0) {
+          closeAnySchedulePopover();
+          return { ok: false, reason: "Input jam/menit pada popover jadwal tidak ditemukan." };
+        } else if (curTimeInputs.length >= 2) {
+          const hRes = await applyTimeSegment(curTimeInputs[0], hours, hh, false);
+          if (hRes.aborted) return hRes;
+          if (!hRes.ok) {
+            closeAnySchedulePopover();
+            return { ok: false, reason: `Gagal mengubah jam jadwal ke ${hh} (masih ${hRes.actual ?? "?"}).` };
+          }
+
           if (!(await smartSleep(80, token))) return { ok: false, aborted: true };
-          cdom.commitScheduleInput(timeInputs[1], min, doc, true);
-        } else if (timeInputs.length === 1) {
-          cdom.commitScheduleInput(timeInputs[0], `${hh}:${min}`, doc, true);
+
+          // Re-check minute input in case changing hour re-rendered the time field
+          if (!curTimeInputs[1].isConnected) {
+            const re = refreshClassified();
+            if (re.timeInputs.length >= 2) curTimeInputs = re.timeInputs;
+          }
+
+          const mRes = await applyTimeSegment(curTimeInputs[1], mins, min, true);
+          if (mRes.aborted) return mRes;
+          if (!mRes.ok) {
+            closeAnySchedulePopover();
+            return { ok: false, reason: `Gagal mengubah menit jadwal ke ${min} (masih ${mRes.actual ?? "?"}).` };
+          }
+        } else if (curTimeInputs.length === 1) {
+          cdom.commitScheduleInput(curTimeInputs[0], `${hh}:${min}`, doc, true);
         }
       } else {
         const setRes = cdom.setScheduleInputsInPopover(readyPopover, targetDate, doc);
@@ -541,9 +655,98 @@
 
       if (!(await smartSleep(250, token))) return { ok: false, aborted: true };
 
-      domBase.clickElement(readyPopover.updateBtn);
+      const finalPopover = cdom.findSchedulePopover(doc) || readyPopover;
+      if (finalPopover.updateBtn && (finalPopover.updateBtn.disabled ||
+          (finalPopover.updateBtn.getAttribute && finalPopover.updateBtn.getAttribute("aria-disabled") === "true"))) {
+        closeAnySchedulePopover();
+        return { ok: false, reason: "Tombol Perbarui nonaktif (pastikan waktu jadwal minimal 20 menit ke depan dan maks 29 hari)." };
+      }
+      domBase.clickElement(finalPopover.updateBtn);
       await waitFor(() => !cdom.findSchedulePopover(doc), 3000, 120, token);
       return { ok: true };
+    }
+
+    async function armMainWorldCoverBridge(win, coverFile, token) {
+      if (!win || typeof win.postMessage !== "function" || typeof win.addEventListener !== "function") {
+        return null;
+      }
+      if (typeof coverFile.arrayBuffer !== "function") {
+        return null;
+      }
+
+      const REQ_SOURCE = "meta-auto-cover-req";
+      const RESP_SOURCE = "meta-auto-cover-res";
+      const requestId = `cov_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+      let bytes;
+      try {
+        bytes = new Uint8Array(await coverFile.arrayBuffer());
+      } catch (_err) {
+        return null;
+      }
+
+      const result = { armed: false, ok: false, error: null, done: false };
+      let cleanup = null;
+
+      const listener = (event) => {
+        if (event.source !== win || !event.data || event.data.source !== RESP_SOURCE) return;
+        if (event.data.requestId !== requestId) return;
+        if (event.data.armed) result.armed = true;
+        if (typeof event.data.ok === "boolean") {
+          result.ok = event.data.ok;
+          result.error = event.data.error || null;
+          result.done = true;
+        }
+      };
+
+      win.addEventListener("message", listener);
+      cleanup = () => {
+        try {
+          win.removeEventListener("message", listener);
+        } catch (_err) {
+          // ignore
+        }
+        try {
+          win.postMessage({ source: REQ_SOURCE, action: "DISARM_COVER_UPLOAD", requestId }, "*");
+        } catch (_err) {
+          // ignore
+        }
+      };
+
+      try {
+        win.postMessage({
+          source: REQ_SOURCE,
+          action: "ARM_COVER_UPLOAD",
+          requestId,
+          name: coverFile.name || "cover.jpg",
+          type: coverFile.type || "image/jpeg",
+          bytes
+        }, "*");
+      } catch (_err) {
+        cleanup();
+        return null;
+      }
+
+      await waitFor(() => result.armed || result.done, 350, 30, token);
+      if (!result.armed && !result.done) {
+        cleanup();
+        return null;
+      }
+
+      return { result, cleanup };
+    }
+
+    async function closeCoverModal(modal) {
+      const active = cdom.findActiveModal(doc) || modal;
+      if (active && typeof cdom.findCancelModalButton === "function") {
+        const cancelBtn = cdom.findCancelModalButton(active, doc);
+        if (cancelBtn) {
+          domBase.clickElement(cancelBtn);
+          await waitFor(() => !cdom.findActiveModal(doc), 1500, 100, runToken);
+          return;
+        }
+      }
+      closeAnySchedulePopover();
     }
 
     async function applyCoverForRow(row, coverFile, token) {
@@ -561,69 +764,141 @@
         return { ok: false, aborted: true };
       }
 
-      // 1. Check if <input type="file"> already exists inside modal, else click "Upload image" tab
-      let fileInput = cdom.findImageFileInputInModal(modal);
-      if (!fileInput) {
-        const uploadTab = cdom.findUploadImageTabInModal(modal, doc);
-        if (uploadTab) {
-          // Intercept any accidental native file-picker .click() while switching tab
-          const win = (doc && doc.defaultView) || (typeof window !== "undefined" ? window : null);
-          const InputProto = win && win.HTMLInputElement ? win.HTMLInputElement.prototype : null;
-          const origClick = InputProto ? InputProto.click : null;
-          let capturedFileInput = null;
+      const win = (doc && doc.defaultView) || (typeof window !== "undefined" ? window : null);
 
-          if (InputProto && origClick) {
-            InputProto.click = function () {
-              if (this.type === "file") {
-                capturedFileInput = this;
-                return;
-              }
-              return origClick.apply(this, arguments);
-            };
-          }
+      async function clickWithInputCapture(targetEl, waitFn) {
+        const InputProto = win && win.HTMLInputElement ? win.HTMLInputElement.prototype : null;
+        const origClick = InputProto ? InputProto.click : null;
+        let captured = null;
 
-          try {
-            domBase.clickElement(uploadTab);
-            if (!(await smartSleep(450, token))) return { ok: false, aborted: true };
-          } finally {
-            if (InputProto && origClick) {
-              InputProto.click = origClick;
+        if (InputProto && origClick) {
+          InputProto.click = function () {
+            const t = (this && (this.type || (typeof this.getAttribute === "function" && this.getAttribute("type")) || "")).toLowerCase();
+            if (t === "file") {
+              captured = this;
+              return;
             }
-          }
+            return origClick.apply(this, arguments);
+          };
+        }
 
-          fileInput = capturedFileInput || cdom.findImageFileInputInModal(cdom.findActiveModal(doc) || modal);
+        try {
+          domBase.clickElement(targetEl);
+          if (waitFn) {
+            const matched = await waitFn(() => captured);
+            return { captured, matched };
+          }
+          if (!(await smartSleep(400, token))) return { aborted: true };
+          return { captured };
+        } finally {
+          if (InputProto && origClick) {
+            InputProto.click = origClick;
+          }
         }
       }
 
+      // 1. Check if <input type="file"> already exists inside modal
+      let fileInput = cdom.findImageFileInputInModal(cdom.findActiveModal(doc) || modal);
+      let mainWorldHandled = false;
+
       if (!fileInput) {
-        return { ok: false, reason: "Input unggah gambar cover (input[type=file]) tidak ditemukan di modal." };
+        // 2. Activate "Unggah gambar" / "Upload image" segmented tab if needed
+        const curModal = cdom.findActiveModal(doc) || modal;
+        const uploadTab = cdom.findUploadImageTabInModal(curModal, doc);
+        const tabAlreadyActive = uploadTab && (
+          uploadTab.getAttribute("aria-pressed") === "true" ||
+          uploadTab.getAttribute("aria-selected") === "true"
+        );
+        let trigger = typeof cdom.findUploadImageTriggerInModal === "function"
+          ? cdom.findUploadImageTriggerInModal(curModal, doc)
+          : null;
+
+        if (uploadTab && (!tabAlreadyActive || !trigger)) {
+          const tabClickRes = await clickWithInputCapture(uploadTab);
+          if (tabClickRes.aborted) return { ok: false, aborted: true };
+          fileInput = tabClickRes.captured || cdom.findImageFileInputInModal(cdom.findActiveModal(doc) || modal);
+          if (!fileInput && typeof cdom.findUploadImageTriggerInModal === "function") {
+            trigger = cdom.findUploadImageTriggerInModal(cdom.findActiveModal(doc) || modal, doc);
+          }
+        }
+
+        // 3. Click inner "Unggah gambar" link/trigger with MAIN-world bridge armed for ephemeral <input type="file">
+        if (!fileInput && (trigger || uploadTab)) {
+          const clickTarget = trigger || uploadTab;
+          const bridge = await armMainWorldCoverBridge(win, coverFile, token);
+
+          try {
+            const clickRes = await clickWithInputCapture(clickTarget, (getCaptured) =>
+              waitFor(() => {
+                if (bridge && bridge.result.done) return { kind: "bridge" };
+                const cap = getCaptured();
+                if (cap) return { kind: "captured", el: cap };
+                const mounted = cdom.findImageFileInputInModal(cdom.findActiveModal(doc) || modal);
+                if (mounted) return { kind: "mounted", el: mounted };
+                return null;
+              }, 1400, 80, token)
+            );
+            if (isAborted(token)) return { ok: false, aborted: true };
+
+            const matched = clickRes.matched;
+            if (matched && matched.kind === "bridge" && bridge.result.ok) {
+              mainWorldHandled = true;
+            } else if (matched && matched.kind === "captured") {
+              fileInput = matched.el;
+            } else if (matched && matched.kind === "mounted") {
+              fileInput = matched.el;
+            } else {
+              fileInput = clickRes.captured || cdom.findImageFileInputInModal(cdom.findActiveModal(doc) || modal);
+            }
+          } finally {
+            if (bridge && bridge.cleanup) {
+              bridge.cleanup();
+            }
+          }
+        }
       }
 
-      const attached = cdom.attachFileToInput(fileInput, coverFile, doc);
-      if (!attached) {
-        return { ok: false, reason: "Gagal melampirkan file cover ke input gambar." };
+      if (!mainWorldHandled) {
+        if (!fileInput) {
+          await closeCoverModal(modal);
+          return { ok: false, reason: "Input unggah gambar cover (input[type=file]) tidak ditemukan di modal." };
+        }
+
+        const attached = cdom.attachFileToInput(fileInput, coverFile, doc);
+        if (!attached) {
+          await closeCoverModal(modal);
+          return { ok: false, reason: "Gagal melampirkan file cover ke input gambar." };
+        }
       }
 
       addLog(`Cover "${coverFile.name}" diunggah untuk "${row.videoTitle}".`, "info");
-      if (!(await smartSleep(Math.max(800, config.stepDelayMs), token))) {
+      if (!(await smartSleep(Math.max(1000, config.stepDelayMs), token))) {
         return { ok: false, aborted: true };
       }
 
-      // Advance modal steps (Next -> Next -> Save/Done) up to 4 steps
-      for (let step = 0; step < 4; step++) {
+      // Advance modal steps (Berikutnya -> Berikutnya -> Simpan) up to 5 steps
+      for (let step = 0; step < 5; step++) {
         const activeModal = cdom.findActiveModal(doc);
         if (!activeModal) break;
 
-        const adv = cdom.findModalAdvanceButton(activeModal, doc);
+        const adv = await waitFor(() => {
+          const cur = cdom.findActiveModal(doc);
+          return cur ? cdom.findModalAdvanceButton(cur, doc) : null;
+        }, 8000, 200, token);
         if (!adv) break;
 
         domBase.clickElement(adv.button);
-        if (!(await smartSleep(550, token))) return { ok: false, aborted: true };
+        if (!(await smartSleep(Math.max(550, config.stepDelayMs), token))) return { ok: false, aborted: true };
 
         if (adv.kind === "save") {
-          await waitFor(() => !cdom.findActiveModal(doc), 5000, 150, token);
+          await waitFor(() => !cdom.findActiveModal(doc), 6000, 150, token);
           break;
         }
+      }
+
+      if (cdom.findActiveModal(doc)) {
+        await closeCoverModal(modal);
+        return { ok: false, reason: "Modal edit cover tidak tersimpan/tertutup." };
       }
 
       return { ok: true };

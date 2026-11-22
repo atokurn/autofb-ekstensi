@@ -770,3 +770,604 @@ test("Composer sets 20/11/2026 date, label-wrapped minute input, and rolls date 
   // Also confirm DMY ambiguity check (06/11/2026 with preferDmy=true)
   assert.equal(cdom.formatDateForInput(new Date(2026, 10, 6), "05/11/2026", "text", true), "06/11/2026");
 });
+
+test("Composer updates Meta spinbutton hour/minute driven by keydown digits and shared label wrapper", async () => {
+  const doc = new MockDocument();
+  const table = doc.createElement("div", { role: "table" });
+  doc.body.appendChild(table);
+
+  const row = doc.createElement("div", { role: "row" });
+  const cb = doc.createElement("input", { type: "checkbox" });
+  cb._rect = { left: 20, top: 120, width: 18, height: 18 };
+  const titleEl = doc.createElement("span");
+  titleEl.textContent = "Video 1";
+  const desc = doc.createElement("textarea");
+  const schedBtn = doc.createElement("button");
+  schedBtn.textContent = "Terbitkan sekarang";
+
+  let savedTime = "";
+  let activePop = null;
+
+  function makeKeyDrivenSpinbutton(initialVal, maxVal, ariaLabel) {
+    let internalState = initialVal;
+    let typedBuf = "";
+    const inp = doc.createElement("input", {
+      type: "text",
+      role: "spinbutton",
+      "aria-label": ariaLabel,
+      "aria-valuemax": String(maxVal)
+    });
+    inp._rect = { left: 100, top: 200, width: 20, height: 20 };
+    inp.value = String(initialVal).padStart(2, "0");
+
+    // Simulate React spinbutton that ignores bulk value assignment and resets on blur unless keydown handled digits
+    inp.addEventListener("keydown", (e) => {
+      if (e && /^\d$/.test(e.key)) {
+        if (typeof e.preventDefault === "function") e.preventDefault();
+        typedBuf = (typedBuf + e.key).slice(-2);
+        const parsed = parseInt(typedBuf, 10);
+        if (parsed <= maxVal) {
+          internalState = parsed;
+          inp.value = String(internalState).padStart(2, "0");
+        }
+      }
+    });
+    inp.addEventListener("blur", () => {
+      typedBuf = "";
+      inp.value = String(internalState).padStart(2, "0");
+    });
+    return inp;
+  }
+
+  schedBtn.addEventListener("click", () => {
+    if (activePop) activePop.remove();
+    const pop = doc.createElement("div");
+    const schedTab = doc.createElement("button", { role: "tab" });
+    schedTab.textContent = "Jadwal";
+    const wrap = doc.createElement("div");
+    let dateInp = null;
+    let hourInp = null;
+    let minInp = null;
+
+    schedTab.addEventListener("click", () => {
+      if (dateInp) return;
+      dateInp = doc.createElement("input", { type: "text" });
+      dateInp.value = "22 November 2026";
+      // Shared <label> wrapping BOTH jam and menit; clicking label steals focus to hourInp
+      const sharedLbl = doc.createElement("label");
+      hourInp = makeKeyDrivenSpinbutton(13, 23, "jam");
+      minInp = makeKeyDrivenSpinbutton(28, 59, "menit");
+      sharedLbl.addEventListener("click", () => {
+        // Simulates label focusing first input if clicked directly
+        hourInp.focus();
+      });
+      sharedLbl.appendChild(hourInp);
+      sharedLbl.appendChild(minInp);
+
+      // Simulate React re-rendering time inputs when dateInput commits
+      dateInp.addEventListener("change", () => {
+        if (sharedLbl.isConnected) {
+          sharedLbl.removeChild(hourInp);
+          sharedLbl.removeChild(minInp);
+          hourInp = makeKeyDrivenSpinbutton(13, 23, "jam");
+          minInp = makeKeyDrivenSpinbutton(28, 59, "menit");
+          sharedLbl.appendChild(hourInp);
+          sharedLbl.appendChild(minInp);
+        }
+      });
+
+      wrap.appendChild(dateInp);
+      wrap.appendChild(sharedLbl);
+    });
+
+    const updateBtn = doc.createElement("button");
+    updateBtn.textContent = "Perbarui";
+    updateBtn.addEventListener("click", () => {
+      savedTime = `${hourInp.value}:${minInp.value}`;
+      pop.remove();
+      activePop = null;
+    });
+
+    pop.appendChild(schedTab);
+    pop.appendChild(wrap);
+    pop.appendChild(updateBtn);
+    doc.body.appendChild(pop);
+    activePop = pop;
+  });
+
+  row.appendChild(cb);
+  row.appendChild(titleEl);
+  row.appendChild(desc);
+  row.appendChild(schedBtn);
+  table.appendChild(row);
+
+  let clock = 0;
+  const eng = cengine.createComposerEngine({
+    document: doc,
+    composerDom: cdom,
+    domBase,
+    sleep: (ms) => {
+      clock += Math.max(1, ms || 1);
+      return Promise.resolve();
+    },
+    now: () => clock
+  });
+
+  await eng.start({
+    enableDescription: false,
+    enableSchedule: true,
+    scheduleStartDate: "2026-11-26",
+    scheduleStartTime: "09:05",
+    enableCover: false,
+    delayMs: 200,
+    stepDelayMs: 150
+  });
+
+  const snap = eng.getSnapshot();
+  assert.equal(snap.status, "completed");
+  assert.equal(savedTime, "09:05");
+});
+
+test("Composer falls back to ArrowUp/ArrowDown stepping when spinbutton rejects digit typing", async () => {
+  const doc = new MockDocument();
+  const table = doc.createElement("div", { role: "table" });
+  doc.body.appendChild(table);
+
+  const row = doc.createElement("div", { role: "row" });
+  const cb = doc.createElement("input", { type: "checkbox" });
+  cb._rect = { left: 20, top: 120, width: 18, height: 18 };
+  const titleEl = doc.createElement("span");
+  titleEl.textContent = "Video 1";
+  const desc = doc.createElement("textarea");
+  const schedBtn = doc.createElement("button");
+  schedBtn.textContent = "Terbitkan sekarang";
+
+  let savedTime = "";
+
+  function makeArrowOnlySpinbutton(initialVal, maxVal, ariaLabel) {
+    let internalState = initialVal;
+    const inp = doc.createElement("input", {
+      type: "text",
+      role: "spinbutton",
+      "aria-label": ariaLabel,
+      "aria-valuemax": String(maxVal)
+    });
+    inp._rect = { left: 100, top: 200, width: 20, height: 20 };
+    inp.value = String(initialVal).padStart(2, "0");
+
+    inp.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowUp") {
+        internalState = Math.min(maxVal, internalState + 1);
+        inp.value = String(internalState).padStart(2, "0");
+      } else if (e.key === "ArrowDown") {
+        internalState = Math.max(0, internalState - 1);
+        inp.value = String(internalState).padStart(2, "0");
+      }
+    });
+    inp.addEventListener("blur", () => {
+      inp.value = String(internalState).padStart(2, "0");
+    });
+    return inp;
+  }
+
+  schedBtn.addEventListener("click", () => {
+    const pop = doc.createElement("div");
+    const schedTab = doc.createElement("button", { role: "tab" });
+    schedTab.textContent = "Jadwal";
+    const dateInp = doc.createElement("input", { type: "text" });
+    dateInp.value = "26/11/2026";
+    const hourInp = makeArrowOnlySpinbutton(13, 23, "jam");
+    const minInp = makeArrowOnlySpinbutton(28, 59, "menit");
+    const updateBtn = doc.createElement("button");
+    updateBtn.textContent = "Perbarui";
+    updateBtn.addEventListener("click", () => {
+      savedTime = `${hourInp.value}:${minInp.value}`;
+      pop.remove();
+    });
+
+    pop.appendChild(schedTab);
+    pop.appendChild(dateInp);
+    pop.appendChild(hourInp);
+    pop.appendChild(minInp);
+    pop.appendChild(updateBtn);
+    doc.body.appendChild(pop);
+  });
+
+  row.appendChild(cb);
+  row.appendChild(titleEl);
+  row.appendChild(desc);
+  row.appendChild(schedBtn);
+  table.appendChild(row);
+
+  let clock = 0;
+  const eng = cengine.createComposerEngine({
+    document: doc,
+    composerDom: cdom,
+    domBase,
+    sleep: (ms) => {
+      clock += Math.max(1, ms || 1);
+      return Promise.resolve();
+    },
+    now: () => clock
+  });
+
+  await eng.start({
+    enableDescription: false,
+    enableSchedule: true,
+    scheduleStartDate: "2026-11-26",
+    scheduleStartTime: "16:20",
+    enableCover: false,
+    delayMs: 200,
+    stepDelayMs: 150
+  });
+
+  const snap = eng.getSnapshot();
+  assert.equal(snap.status, "completed");
+  assert.equal(savedTime, "16:20");
+});
+
+test("Composer detects and updates Meta [role=application] hidden spinbuttons paired via sibling label[for][aria-hidden=true]", async () => {
+  const doc = new MockDocument();
+  const table = doc.createElement("div", { role: "table" });
+  doc.body.appendChild(table);
+
+  const row = doc.createElement("div", { role: "row" });
+  const cb = doc.createElement("input", { type: "checkbox" });
+  cb._rect = { left: 20, top: 120, width: 18, height: 18 };
+  const titleEl = doc.createElement("span");
+  titleEl.textContent = "Video Live DOM";
+  const desc = doc.createElement("textarea");
+  const schedBtn = doc.createElement("button");
+  schedBtn.textContent = "Terbitkan sekarang";
+
+  let savedDate = "";
+  let savedTime = "";
+
+  function makeMetaSegment(id, initialVal, maxVal) {
+    let val = initialVal;
+    let active = false;
+    let buf = "";
+
+    const segWrap = doc.createElement("div", { class: "x1rg5ohu" });
+    const inner = doc.createElement("div");
+    const lbl = doc.createElement("label", { for: id, "aria-hidden": "true" });
+    lbl._rect = { left: 832, top: 335, width: 20, height: 20 };
+    lbl.textContent = String(val).padStart(2, "0");
+
+    // Visually hidden <input role="spinbutton"> with opacity: 0 / zero rect and empty .value
+    const inp = doc.createElement("input", {
+      id,
+      role: "spinbutton",
+      "aria-label": "",
+      "aria-valuenow": "",
+      "aria-valuemin": "0",
+      "aria-valuemax": String(maxVal)
+    });
+    inp.style.opacity = "0";
+    inp._rect = { left: 0, top: 0, width: 0, height: 0 };
+    inp.value = "";
+
+    lbl.addEventListener("click", () => {
+      active = true;
+      buf = "";
+    });
+
+    inp.addEventListener("keydown", (e) => {
+      if (!active) return;
+      if (e && /^\d$/.test(e.key)) {
+        if (typeof e.preventDefault === "function") e.preventDefault();
+        buf = (buf + e.key).slice(-2);
+        const parsed = parseInt(buf, 10);
+        if (parsed <= maxVal) {
+          val = parsed;
+          lbl.textContent = String(val).padStart(2, "0");
+        }
+      }
+    });
+
+    inp.addEventListener("focusout", () => {
+      active = false;
+      buf = "";
+    });
+
+    inner.appendChild(lbl);
+    segWrap.appendChild(inner);
+    segWrap.appendChild(inp);
+    return {
+      segWrap,
+      lbl,
+      reset: (newVal) => {
+        val = newVal;
+        lbl.textContent = String(val).padStart(2, "0");
+      }
+    };
+  }
+
+  schedBtn.addEventListener("click", () => {
+    const pop = doc.createElement("div");
+    const schedTab = doc.createElement("div", { role: "button", tabindex: "0" });
+    schedTab.textContent = "Jadwal";
+
+    const dateInp = doc.createElement("input", { id: "js_20t", placeholder: "dd/mm/yyyy" });
+    dateInp.value = "22 November 2026";
+
+    const app = doc.createElement("div", { role: "application" });
+    app._rect = { left: 874, top: 335, width: 44, height: 20 };
+    const hSeg = makeMetaSegment("js_211", 16, 23);
+    const colon = doc.createElement("span");
+    colon.textContent = ":";
+    const mSeg = makeMetaSegment("js_212", 43, 59);
+    app.appendChild(hSeg.segWrap);
+    app.appendChild(colon);
+    app.appendChild(mSeg.segWrap);
+
+    // Date change formats display and resets time (like Meta's live popover)
+    dateInp.addEventListener("change", () => {
+      if (dateInp.value === "23/11/2026") {
+        dateInp.value = "23 November 2026";
+        hSeg.reset(16);
+        mSeg.reset(47);
+      }
+    });
+
+    const updateBtn = doc.createElement("div", { role: "button", tabindex: "0" });
+    updateBtn.textContent = "Perbarui";
+    updateBtn.addEventListener("click", () => {
+      savedDate = dateInp.value;
+      savedTime = `${hSeg.lbl.textContent}:${mSeg.lbl.textContent}`;
+      pop.remove();
+    });
+
+    pop.appendChild(schedTab);
+    pop.appendChild(dateInp);
+    pop.appendChild(app);
+    pop.appendChild(updateBtn);
+    doc.body.appendChild(pop);
+  });
+
+  row.appendChild(cb);
+  row.appendChild(titleEl);
+  row.appendChild(desc);
+  row.appendChild(schedBtn);
+  table.appendChild(row);
+
+  let clock = 0;
+  const eng = cengine.createComposerEngine({
+    document: doc,
+    composerDom: cdom,
+    domBase,
+    sleep: (ms) => {
+      clock += Math.max(1, ms || 1);
+      return Promise.resolve();
+    },
+    now: () => clock
+  });
+
+  await eng.start({
+    enableDescription: false,
+    enableSchedule: true,
+    scheduleStartDate: "2026-11-23",
+    scheduleStartTime: "09:45",
+    enableCover: false,
+    delayMs: 200,
+    stepDelayMs: 150
+  });
+
+  const snap = eng.getSnapshot();
+  assert.equal(snap.status, "completed");
+  assert.equal(savedDate, "23 November 2026");
+  assert.equal(savedTime, "09:45");
+});
+
+test("Composer uploads cover via Meta 3-step Buat->Optimalkan->Simpan modal with inner Unggah gambar link & ephemeral file input", async () => {
+  const doc = new MockDocument();
+  const table = doc.createElement("div", { role: "table" });
+  doc.body.appendChild(table);
+
+  const row = doc.createElement("div", { role: "row" });
+  const cb = doc.createElement("input", { type: "checkbox" });
+  cb._rect = { left: 20, top: 120, width: 18, height: 18 };
+  const titleEl = doc.createElement("span");
+  titleEl.textContent = "Gardenia Ep 1";
+  const desc = doc.createElement("textarea");
+  const schedBtn = doc.createElement("button");
+  schedBtn.textContent = "Ter...";
+  const moreBtn = doc.createElement("div", { role: "button", tabindex: "0" });
+  moreBtn.textContent = "O...";
+
+  let uploadedCoverName = "";
+  let modalSaved = false;
+
+  moreBtn.addEventListener("click", () => {
+    const modal = doc.createElement("div", { role: "dialog" });
+    const body = doc.createElement("div");
+    let step = 1;
+
+    // Segmented group: Pilih yang disarankan | Pilih bingkai | Unggah gambar
+    const group = doc.createElement("div", { role: "group" });
+    const tabSuggested = doc.createElement("div", { role: "button", "aria-pressed": "true" });
+    tabSuggested.textContent = "Pilih yang disarankan";
+    const tabUpload = doc.createElement("div", { role: "button", "aria-pressed": "false" });
+    tabUpload.textContent = "Unggah gambar";
+    group.appendChild(tabSuggested);
+    group.appendChild(tabUpload);
+
+    const dropCard = doc.createElement("div");
+    const heading = doc.createElement("div", { role: "heading", "aria-level": "4" });
+    heading.textContent = "Unggah gambar";
+
+    let uploadLink = null;
+    const footerBtn = doc.createElement("div", { role: "button", tabindex: "0" });
+    footerBtn.textContent = "Berikutnya";
+
+    tabUpload.addEventListener("click", () => {
+      tabSuggested.setAttribute("aria-pressed", "false");
+      tabUpload.setAttribute("aria-pressed", "true");
+      if (!uploadLink) {
+        uploadLink = doc.createElement("a", { href: "#", role: "link", tabindex: "0" });
+        uploadLink.textContent = "Unggah gambar";
+        uploadLink.addEventListener("click", () => {
+          // Ephemeral detached <input type="file"> (never mounted into modal DOM!)
+          const ephInput = doc.createElement("input", { type: "file" });
+          ephInput.addEventListener("change", () => {
+            if (ephInput.files && ephInput.files[0]) {
+              uploadedCoverName = ephInput.files[0].name;
+            }
+          });
+          ephInput.click();
+        });
+        dropCard.appendChild(heading);
+        dropCard.appendChild(uploadLink);
+      }
+    });
+
+    footerBtn.addEventListener("click", () => {
+      if (step === 1) {
+        step = 2; // Optimalkan
+        footerBtn.textContent = "Berikutnya";
+      } else if (step === 2) {
+        step = 3; // Terbitkan -> Simpan
+        footerBtn.textContent = "Simpan";
+      } else {
+        modalSaved = true;
+        modal.remove();
+      }
+    });
+
+    const cancelBtn = doc.createElement("div", { role: "button", tabindex: "0" });
+    cancelBtn.textContent = "Batal";
+    cancelBtn.addEventListener("click", () => modal.remove());
+
+    body.appendChild(group);
+    body.appendChild(dropCard);
+    modal.appendChild(body);
+    modal.appendChild(cancelBtn);
+    modal.appendChild(footerBtn);
+    doc.body.appendChild(modal);
+  });
+
+  row.appendChild(cb);
+  row.appendChild(titleEl);
+  row.appendChild(desc);
+  row.appendChild(schedBtn);
+  row.appendChild(moreBtn);
+  table.appendChild(row);
+
+  let clock = 0;
+  const eng = cengine.createComposerEngine({
+    document: doc,
+    composerDom: cdom,
+    domBase,
+    sleep: (ms) => {
+      clock += Math.max(1, ms || 1);
+      return Promise.resolve();
+    },
+    now: () => clock
+  });
+  eng.setCoverFiles([{ name: "cover-ep1.png", type: "image/png" }]);
+
+  await eng.start({
+    enableDescription: false,
+    enableSchedule: false,
+    enableCover: true,
+    coverMatchMode: "sequential",
+    delayMs: 200,
+    stepDelayMs: 150
+  });
+
+  const snap = eng.getSnapshot();
+  assert.equal(snap.status, "completed");
+  assert.equal(snap.processedCount, 1);
+  assert.equal(snap.failedCount, 0);
+  assert.equal(uploadedCoverName, "cover-ep1.png");
+  assert.equal(modalSaved, true);
+});
+
+test("cover-bridge intercepts detached file input click when armed via postMessage", async () => {
+  const listeners = [];
+  class FakeInput {
+    constructor() {
+      this.type = "file";
+      this.files = null;
+      this._evts = [];
+    }
+    addEventListener(t, fn) {
+      this._evts.push({ t, fn });
+    }
+    dispatchEvent(evt) {
+      for (const h of this._evts) {
+        if (h.t === evt.type) h.fn(evt);
+      }
+      return true;
+    }
+    click() {
+      throw new Error("Native picker should not open while armed");
+    }
+  }
+  class FakeDataTransfer {
+    constructor() {
+      this.files = [];
+      this.items = { add: (f) => this.files.push(f) };
+    }
+  }
+  class FakeFile {
+    constructor(parts, name, opts) {
+      this.parts = parts;
+      this.name = name;
+      this.type = opts && opts.type;
+    }
+  }
+
+  const posted = [];
+  const fakeWindow = {
+    HTMLInputElement: FakeInput,
+    DataTransfer: FakeDataTransfer,
+    File: FakeFile,
+    Event: class { constructor(type) { this.type = type; } },
+    addEventListener: (_t, fn) => listeners.push(fn),
+    postMessage: (data) => posted.push(data)
+  };
+
+  const vm = require("vm");
+  const fs = require("fs");
+  const bridgeSrc = fs.readFileSync(require.resolve("../src/cover-bridge.js"), "utf8");
+  const ctx = vm.createContext({
+    window: fakeWindow,
+    HTMLInputElement: FakeInput,
+    DataTransfer: FakeDataTransfer,
+    File: FakeFile,
+    Event: fakeWindow.Event,
+    Date,
+    Uint8Array
+  });
+  vm.runInContext(bridgeSrc, ctx);
+
+  // Arm bridge
+  for (const fn of listeners) {
+    fn({
+      source: fakeWindow,
+      data: {
+        source: "meta-auto-cover-req",
+        action: "ARM_COVER_UPLOAD",
+        requestId: "req1",
+        name: "thumb.jpg",
+        type: "image/jpeg",
+        bytes: new Uint8Array([1, 2, 3])
+      }
+    });
+  }
+  assert.equal(posted[0].armed, true);
+
+  let changedFile = null;
+  const inp = new FakeInput();
+  inp.addEventListener("change", () => {
+    changedFile = inp.files[0];
+  });
+  inp.click();
+
+  assert.ok(changedFile);
+  assert.equal(changedFile.name, "thumb.jpg");
+  assert.equal(changedFile.type, "image/jpeg");
+  assert.equal(posted[1].ok, true);
+  assert.equal(posted[1].requestId, "req1");
+});

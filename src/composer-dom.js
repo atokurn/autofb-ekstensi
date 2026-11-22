@@ -348,7 +348,10 @@
   function buttonLabel(el) {
     if (!el) return "";
     return normalize(
-      (el.innerText || el.textContent || "") + " " + (el.getAttribute("aria-label") || "")
+      (el.innerText || el.textContent || "") + " " +
+      (el.getAttribute("aria-label") || "") + " " +
+      (el.getAttribute("title") || "") + " " +
+      (el.getAttribute("data-tooltip-content") || "")
     );
   }
 
@@ -378,6 +381,13 @@
     for (const btn of buttons) {
       const lbl = buttonLabel(btn);
       if (MORE_EDIT_LABELS.some((kw) => lbl.includes(kw))) {
+        return btn;
+      }
+    }
+    // Narrow viewport fallback when button displays truncated "O..." without aria-label
+    for (const btn of buttons) {
+      const text = normalize(btn.innerText || btn.textContent || "");
+      if (text === "o..." || text === "o…") {
         return btn;
       }
     }
@@ -521,11 +531,64 @@
     return txt.includes("jadwal") || txt.includes("perbarui") || txt.includes("terbitkan");
   }
 
+  function findAssociatedLabel(el, doc) {
+    if (!el) return null;
+    const elId = el.id || (typeof el.getAttribute === "function" ? el.getAttribute("id") : "");
+    if (!elId) return null;
+    const ownerDoc = el.ownerDocument || doc || (typeof document !== "undefined" ? document : null);
+    if (!ownerDoc || typeof ownerDoc.querySelectorAll !== "function") return null;
+    const labels = ownerDoc.querySelectorAll("label[for]");
+    for (const lbl of labels) {
+      if (lbl.getAttribute && lbl.getAttribute("for") === elId) {
+        return lbl;
+      }
+    }
+    return null;
+  }
+
+  function isVisuallyPresentIgnoringAriaHidden(el, doc) {
+    if (!el || !el.isConnected || isOwn(el)) return false;
+    const ownerDoc = el.ownerDocument || doc || (typeof document !== "undefined" ? document : null);
+    const win = getDocView(ownerDoc);
+    let curr = el;
+    while (curr && curr.nodeType === 1) {
+      if (curr.hasAttribute && curr.hasAttribute("hidden")) return false;
+      if (win && typeof win.getComputedStyle === "function") {
+        const style = win.getComputedStyle(curr);
+        if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) {
+          return false;
+        }
+      } else if (curr.style && (curr.style.display === "none" || curr.style.visibility === "hidden")) {
+        return false;
+      }
+      curr = curr.parentElement;
+    }
+    if (win && typeof el.getBoundingClientRect === "function") {
+      const bodyRect = ownerDoc && ownerDoc.body && ownerDoc.body.getBoundingClientRect ? ownerDoc.body.getBoundingClientRect() : null;
+      if (bodyRect && (bodyRect.width > 0 || bodyRect.height > 0)) {
+        const rect = el.getBoundingClientRect();
+        if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+      }
+    }
+    return true;
+  }
+
   function isFieldVisibleOrLabelVisible(el, doc) {
     if (!el || !el.isConnected || isOwn(el)) return false;
     if (isVisible(el, doc)) return true;
-    const lbl = typeof el.closest === "function" ? el.closest("label") : null;
-    return Boolean(lbl && isVisible(lbl, doc));
+
+    const parentLbl = typeof el.closest === "function" ? el.closest("label") : null;
+    if (parentLbl && isVisuallyPresentIgnoringAriaHidden(parentLbl, doc)) return true;
+
+    const assocLbl = findAssociatedLabel(el, doc);
+    if (assocLbl && isVisuallyPresentIgnoringAriaHidden(assocLbl, doc)) return true;
+
+    if (el.getAttribute && el.getAttribute("role") === "spinbutton") {
+      const appWrap = typeof el.closest === "function" ? el.closest('[role="application"]') : null;
+      if (appWrap && isVisible(appWrap, doc)) return true;
+    }
+
+    return false;
   }
 
   function classifyScheduleInputs(container, doc) {
@@ -553,34 +616,25 @@
     let dateInput = null;
     const timeInputs = [];
 
+    const getFieldMeta = (el) => {
+      const parentLabel = typeof el.closest === "function" ? el.closest("label") : null;
+      return {
+        aria: normalize(
+          (el.getAttribute("aria-label") || "") + " " +
+          (el.getAttribute("placeholder") || "") + " " +
+          (parentLabel ? (parentLabel.getAttribute("aria-label") || "") : "")
+        ),
+        maxAttr: el.getAttribute("max") || el.getAttribute("aria-valuemax")
+      };
+    };
+
     for (const inp of inputs) {
       const type = (inp.getAttribute("type") || "").toLowerCase();
       const val = String(inp.value || inp.textContent || "").trim();
-      const parentLabel = typeof inp.closest === "function" ? inp.closest("label") : null;
-      const aria = normalize(
-        (inp.getAttribute("aria-label") || "") + " " +
-        (inp.getAttribute("placeholder") || "") + " " +
-        (parentLabel ? (parentLabel.getAttribute("aria-label") || "") : "")
-      );
+      const { aria, maxAttr } = getFieldMeta(inp);
 
-      if (
-        type === "date" ||
-        aria.includes("date") ||
-        aria.includes("tanggal") ||
-        /dd\/mm\/yyyy|mm\/dd\/yyyy|hh\/bb\/tttt/i.test(aria) ||
-        /\d{4}/.test(val) ||
-        /[A-Za-z]{3,}/.test(val) ||
-        /\d{1,2}\/\d{1,2}\/\d{4}/.test(val)
-      ) {
-        if (!dateInput) dateInput = inp;
-        continue;
-      }
-
-      const maxAttr = inp.getAttribute("max");
-      if (
+      const isExplicitTime =
         type === "time" ||
-        type === "number" ||
-        type === "tel" ||
         aria.includes("hour") ||
         aria.includes("jam") ||
         aria.includes("minute") ||
@@ -588,12 +642,50 @@
         maxAttr === "23" ||
         maxAttr === "12" ||
         maxAttr === "59" ||
-        /^\d{1,2}(:\d{2})?$/.test(val) ||
-        inp.getAttribute("role") === "spinbutton"
+        inp.getAttribute("role") === "spinbutton";
+
+      if (
+        !isExplicitTime &&
+        (
+          type === "date" ||
+          aria.includes("date") ||
+          aria.includes("tanggal") ||
+          /dd\/mm\/yyyy|mm\/dd\/yyyy|hh\/bb\/tttt/i.test(aria) ||
+          /\d{4}/.test(val) ||
+          /[A-Za-z]{3,}/.test(val) ||
+          /\d{1,2}\/\d{1,2}\/\d{4}/.test(val)
+        )
+      ) {
+        if (!dateInput) dateInput = inp;
+        continue;
+      }
+
+      if (
+        isExplicitTime ||
+        type === "number" ||
+        type === "tel" ||
+        /^\d{1,2}(:\d{2})?$/.test(val)
       ) {
         timeInputs.push(inp);
       } else if (dateInput && (type === "text" || type === "")) {
         timeInputs.push(inp);
+      }
+    }
+
+    if (timeInputs.length >= 2) {
+      const hIdx = timeInputs.findIndex((el) => {
+        const { aria, maxAttr } = getFieldMeta(el);
+        return aria.includes("hour") || aria.includes("jam") || maxAttr === "23" || maxAttr === "12";
+      });
+      const mIdx = timeInputs.findIndex((el) => {
+        const { aria, maxAttr } = getFieldMeta(el);
+        return aria.includes("minute") || aria.includes("menit") || maxAttr === "59";
+      });
+      if (hIdx >= 0 && mIdx >= 0 && hIdx !== mIdx) {
+        const hEl = timeInputs[hIdx];
+        const mEl = timeInputs[mIdx];
+        const rest = timeInputs.filter((_, idx) => idx !== hIdx && idx !== mIdx);
+        timeInputs.splice(0, timeInputs.length, hEl, mEl, ...rest);
       }
     }
 
@@ -624,30 +716,273 @@
     }) || null;
   }
 
+  function parseNumericText(raw) {
+    const str = String(raw == null ? "" : raw).trim();
+    if (!/^-?\d+$/.test(str)) return null;
+    const n = parseInt(str, 10);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function readSpinbuttonNumber(el, doc) {
+    if (!el) return null;
+    const assocLbl = findAssociatedLabel(el, doc);
+    if (assocLbl && isVisuallyPresentIgnoringAriaHidden(assocLbl, doc)) {
+      const lblNum = parseNumericText(assocLbl.textContent);
+      if (lblNum !== null) return lblNum;
+    }
+    if (el.getAttribute && el.getAttribute("aria-valuenow") != null) {
+      const ariaNum = parseNumericText(el.getAttribute("aria-valuenow"));
+      if (ariaNum !== null) return ariaNum;
+    }
+    if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT") {
+      const valNum = parseNumericText(el.value);
+      if (valNum !== null) return valNum;
+    } else {
+      const txtNum = parseNumericText(el.textContent);
+      if (txtNum !== null) return txtNum;
+    }
+    if (assocLbl) {
+      return parseNumericText(assocLbl.textContent);
+    }
+    return null;
+  }
+
+  function focusScheduleField(el, doc) {
+    if (!el || !el.isConnected) return false;
+    const ownerDoc = el.ownerDocument || doc || (typeof document !== "undefined" ? document : null);
+    if (typeof el.scrollIntoView === "function") {
+      try {
+        el.scrollIntoView({ block: "nearest", inline: "nearest" });
+      } catch (_err) {
+        // ignore
+      }
+    }
+    // Only click associated/wrapping <label> if input itself is visually hidden; otherwise a shared <label> can steal focus
+    const assocLbl = findAssociatedLabel(el, ownerDoc);
+    if (isVisible(el, ownerDoc)) {
+      if (typeof el.click === "function") el.click();
+      if (typeof el.focus === "function") el.focus();
+    } else if (assocLbl && isVisuallyPresentIgnoringAriaHidden(assocLbl, ownerDoc)) {
+      if (typeof assocLbl.click === "function") assocLbl.click();
+      if (ownerDoc && ownerDoc.activeElement !== el && typeof el.focus === "function") {
+        el.focus();
+      }
+    } else {
+      const parentLbl = typeof el.closest === "function" ? el.closest("label") : null;
+      if (parentLbl && typeof parentLbl.click === "function") parentLbl.click();
+      else if (typeof el.click === "function") el.click();
+      if (typeof el.focus === "function") el.focus();
+    }
+    return true;
+  }
+
+  function buildKeyInfo(key) {
+    if (key === "Enter") return { key: "Enter", code: "Enter", keyCode: 13 };
+    if (key === "ArrowUp") return { key: "ArrowUp", code: "ArrowUp", keyCode: 38 };
+    if (key === "ArrowDown") return { key: "ArrowDown", code: "ArrowDown", keyCode: 40 };
+    if (key === "Backspace") return { key: "Backspace", code: "Backspace", keyCode: 8 };
+    if (/^\d$/.test(key)) {
+      const kc = 48 + parseInt(key, 10);
+      return { key, code: "Digit" + key, keyCode: kc };
+    }
+    const chCode = key && key.length === 1 ? key.charCodeAt(0) : 0;
+    return { key, code: key, keyCode: chCode };
+  }
+
+  function dispatchKeyEvent(el, win, eventType, key, codeOverride, keyCodeOverride) {
+    if (!el || typeof el.dispatchEvent !== "function") return true;
+    const info = buildKeyInfo(key);
+    const code = codeOverride || info.code;
+    const keyCode = keyCodeOverride != null ? keyCodeOverride : info.keyCode;
+    const KeyEvt = (win && win.KeyboardEvent) || (typeof KeyboardEvent !== "undefined" ? KeyboardEvent : null);
+    const init = {
+      key: info.key,
+      code,
+      keyCode,
+      which: keyCode,
+      charCode: eventType === "keypress" ? keyCode : 0,
+      bubbles: true,
+      cancelable: true
+    };
+    const evt = KeyEvt
+      ? new KeyEvt(eventType, init)
+      : Object.assign({
+          type: eventType,
+          defaultPrevented: false,
+          preventDefault() {
+            this.defaultPrevented = true;
+          }
+        }, init);
+    const res = el.dispatchEvent(evt);
+    return res !== false && !evt.defaultPrevented;
+  }
+
+  function dispatchSimpleEvent(el, win, eventType) {
+    if (!el || typeof el.dispatchEvent !== "function") return;
+    const EventCtor = (win && win.Event) || (typeof Event !== "undefined" ? Event : null);
+    if (EventCtor) {
+      el.dispatchEvent(new EventCtor(eventType, { bubbles: true }));
+    }
+  }
+
+  function setInputViaNativeSetter(el, strVal, win, inputType, data) {
+    if (!el) return false;
+    const proto = el.tagName === "TEXTAREA"
+      ? (win && win.HTMLTextAreaElement ? win.HTMLTextAreaElement.prototype : null)
+      : (win && win.HTMLInputElement ? win.HTMLInputElement.prototype : null);
+    const descriptor = proto ? Object.getOwnPropertyDescriptor(proto, "value") : null;
+    if (descriptor && typeof descriptor.set === "function") {
+      descriptor.set.call(el, strVal);
+    } else {
+      el.value = strVal;
+    }
+
+    const InputEvt = (win && win.InputEvent) || (typeof InputEvent !== "undefined" ? InputEvent : null);
+    const EventCtor = (win && win.Event) || (typeof Event !== "undefined" ? Event : null);
+    if (InputEvt && typeof el.dispatchEvent === "function") {
+      el.dispatchEvent(new InputEvt("input", {
+        bubbles: true,
+        inputType: inputType || "insertText",
+        data: data !== undefined ? data : strVal
+      }));
+    } else if (EventCtor && typeof el.dispatchEvent === "function") {
+      el.dispatchEvent(new EventCtor("input", { bubbles: true }));
+    }
+    if (EventCtor && typeof el.dispatchEvent === "function") {
+      el.dispatchEvent(new EventCtor("change", { bubbles: true }));
+    }
+    return true;
+  }
+
+  function selectAllInputText(el) {
+    if (typeof el.select === "function") {
+      try {
+        el.select();
+      } catch (_err) {
+        // ignore
+      }
+    }
+    if (typeof el.setSelectionRange === "function") {
+      try {
+        el.setSelectionRange(0, String(el.value || "").length);
+      } catch (_err) {
+        // ignore (e.g. type="number")
+      }
+    }
+  }
+
+  function typeDigitsIntoSpinbutton(el, strVal, ownerDoc, win) {
+    selectAllInputText(el);
+    const InputEvt = (win && win.InputEvent) || (typeof InputEvent !== "undefined" ? InputEvent : null);
+    const assocLbl = findAssociatedLabel(el, ownerDoc);
+    const hasLabelDisplay = Boolean(assocLbl && isVisuallyPresentIgnoringAriaHidden(assocLbl, ownerDoc));
+
+    for (let idx = 0; idx < strVal.length; idx++) {
+      const ch = strVal[idx];
+      const prefix = strVal.slice(0, idx + 1);
+      const prefixNum = parseInt(prefix, 10);
+      const prevLabelText = hasLabelDisplay ? String(assocLbl.textContent || "").trim() : null;
+      const keyNotCanceled = dispatchKeyEvent(el, win, "keydown", ch);
+
+      const handledByLabel = hasLabelDisplay &&
+        String(assocLbl.textContent || "").trim() !== prevLabelText &&
+        readSpinbuttonNumber(el, ownerDoc) === prefixNum;
+
+      if (keyNotCanceled && !handledByLabel) {
+        dispatchKeyEvent(el, win, "keypress", ch);
+
+        let beforeNotCanceled = true;
+        if (InputEvt && typeof el.dispatchEvent === "function") {
+          const biEvt = new InputEvt("beforeinput", {
+            bubbles: true,
+            cancelable: true,
+            inputType: "insertText",
+            data: ch
+          });
+          const res = el.dispatchEvent(biEvt);
+          beforeNotCanceled = res !== false && !biEvt.defaultPrevented;
+        }
+
+        const handledAfterBeforeInput = hasLabelDisplay &&
+          String(assocLbl.textContent || "").trim() !== prevLabelText &&
+          readSpinbuttonNumber(el, ownerDoc) === prefixNum;
+
+        if (beforeNotCanceled && !handledAfterBeforeInput && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) {
+          if (idx === 0) selectAllInputText(el);
+          let insertedViaExec = false;
+          if (ownerDoc && typeof ownerDoc.execCommand === "function") {
+            try {
+              ownerDoc.execCommand("insertText", false, ch);
+              insertedViaExec = true;
+            } catch (_err) {
+              insertedViaExec = false;
+            }
+          }
+          if (!insertedViaExec || String(el.value || "") !== prefix) {
+            setInputViaNativeSetter(el, prefix, win, "insertText", ch);
+          }
+        }
+      }
+
+      dispatchKeyEvent(el, win, "keyup", ch);
+    }
+  }
+
+  function stepSpinbuttonWithArrows(el, targetNum, ownerDoc, win, maxSteps) {
+    let cur = readSpinbuttonNumber(el, ownerDoc);
+    if (cur === null || cur === targetNum) return cur === targetNum;
+    const limit = maxSteps || 65;
+    for (let step = 0; step < limit; step++) {
+      if (cur === targetNum) return true;
+      const arrowKey = targetNum > cur ? "ArrowUp" : "ArrowDown";
+      dispatchKeyEvent(el, win, "keydown", arrowKey);
+      dispatchKeyEvent(el, win, "keyup", arrowKey);
+      const next = readSpinbuttonNumber(el, ownerDoc);
+      if (next === null || next === cur) break;
+      cur = next;
+    }
+    return cur === targetNum;
+  }
+
+  function isSpinbuttonInput(el) {
+    if (!el) return false;
+    if (el.getAttribute && el.getAttribute("role") === "spinbutton") return true;
+    const type = (el.getAttribute && el.getAttribute("type") ? el.getAttribute("type") : "").toLowerCase();
+    if (type === "time" || type === "date") return false;
+    const maxAttr = el.getAttribute ? el.getAttribute("max") : null;
+    return maxAttr === "23" || maxAttr === "12" || maxAttr === "59";
+  }
+
   function commitScheduleInput(el, value, doc, pressEnter) {
     if (!el || !el.isConnected) return false;
     const ownerDoc = el.ownerDocument || doc || (typeof document !== "undefined" ? document : null);
     const win = getDocView(ownerDoc);
     const strVal = String(value == null ? "" : value);
 
-    const parentLbl = typeof el.closest === "function" ? el.closest("label") : null;
-    if (parentLbl && typeof parentLbl.click === "function") {
-      parentLbl.click();
-    } else if (typeof el.click === "function") {
-      el.click();
-    }
-    if (typeof el.focus === "function") {
-      el.focus();
-    }
+    focusScheduleField(el, ownerDoc);
 
     if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
-      if (typeof el.select === "function") {
-        try {
-          el.select();
-        } catch (_err) {
-          // ignore
+      if (isSpinbuttonInput(el) && /^\d{1,2}$/.test(strVal)) {
+        const targetNum = parseInt(strVal, 10);
+        typeDigitsIntoSpinbutton(el, strVal, ownerDoc, win);
+
+        if (readSpinbuttonNumber(el, ownerDoc) !== targetNum) {
+          setInputViaNativeSetter(el, strVal, win, "insertText", strVal);
         }
+        if (readSpinbuttonNumber(el, ownerDoc) !== targetNum) {
+          stepSpinbuttonWithArrows(el, targetNum, ownerDoc, win, 65);
+        }
+
+        if (pressEnter) {
+          dispatchKeyEvent(el, win, "keydown", "Enter");
+          dispatchKeyEvent(el, win, "keyup", "Enter");
+        }
+        dispatchSimpleEvent(el, win, "blur");
+        dispatchSimpleEvent(el, win, "focusout");
+        return true;
       }
+
+      selectAllInputText(el);
 
       if (ownerDoc && typeof ownerDoc.execCommand === "function") {
         try {
@@ -659,40 +994,16 @@
       }
 
       if (el.value !== strVal) {
-        const proto = el.tagName === "TEXTAREA"
-          ? (win && win.HTMLTextAreaElement ? win.HTMLTextAreaElement.prototype : null)
-          : (win && win.HTMLInputElement ? win.HTMLInputElement.prototype : null);
-        const descriptor = proto ? Object.getOwnPropertyDescriptor(proto, "value") : null;
-        if (descriptor && typeof descriptor.set === "function") {
-          descriptor.set.call(el, strVal);
-        } else {
-          el.value = strVal;
-        }
-
-        const InputEvt = (win && win.InputEvent) || (typeof InputEvent !== "undefined" ? InputEvent : null);
-        const EventCtor = (win && win.Event) || (typeof Event !== "undefined" ? Event : null);
-        if (InputEvt && typeof el.dispatchEvent === "function") {
-          el.dispatchEvent(new InputEvt("input", { bubbles: true, inputType: "insertText", data: strVal }));
-        } else if (EventCtor && typeof el.dispatchEvent === "function") {
-          el.dispatchEvent(new EventCtor("input", { bubbles: true }));
-        }
-        if (EventCtor && typeof el.dispatchEvent === "function") {
-          el.dispatchEvent(new EventCtor("change", { bubbles: true }));
-        }
+        setInputViaNativeSetter(el, strVal, win, "insertText", strVal);
       }
 
       if (pressEnter) {
-        const KeyEvt = (win && win.KeyboardEvent) || (typeof KeyboardEvent !== "undefined" ? KeyboardEvent : null);
-        if (KeyEvt && typeof el.dispatchEvent === "function") {
-          el.dispatchEvent(new KeyEvt("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
-          el.dispatchEvent(new KeyEvt("keyup", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
-        }
+        dispatchKeyEvent(el, win, "keydown", "Enter");
+        dispatchKeyEvent(el, win, "keyup", "Enter");
       }
 
-      const EventCtor = (win && win.Event) || (typeof Event !== "undefined" ? Event : null);
-      if (EventCtor && typeof el.dispatchEvent === "function") {
-        el.dispatchEvent(new EventCtor("blur", { bubbles: true }));
-      }
+      dispatchSimpleEvent(el, win, "blur");
+      dispatchSimpleEvent(el, win, "focusout");
       return true;
     }
 
@@ -701,13 +1012,24 @@
       return setNativeInputValue(el, strVal, ownerDoc);
     }
 
-    const KeyEvt = (win && win.KeyboardEvent) || (typeof KeyboardEvent !== "undefined" ? KeyboardEvent : null);
-    if (KeyEvt && typeof el.dispatchEvent === "function") {
+    if (typeof el.dispatchEvent === "function") {
       for (const ch of strVal) {
-        el.dispatchEvent(new KeyEvt("keydown", { key: ch, bubbles: true }));
-        el.dispatchEvent(new KeyEvt("keypress", { key: ch, bubbles: true }));
-        el.dispatchEvent(new KeyEvt("keyup", { key: ch, bubbles: true }));
+        dispatchKeyEvent(el, win, "keydown", ch);
+        dispatchKeyEvent(el, win, "keypress", ch);
+        dispatchKeyEvent(el, win, "keyup", ch);
       }
+      if (/^\d{1,2}$/.test(strVal)) {
+        const targetNum = parseInt(strVal, 10);
+        if (readSpinbuttonNumber(el, ownerDoc) !== targetNum) {
+          stepSpinbuttonWithArrows(el, targetNum, ownerDoc, win, 65);
+        }
+      }
+      if (pressEnter) {
+        dispatchKeyEvent(el, win, "keydown", "Enter");
+        dispatchKeyEvent(el, win, "keyup", "Enter");
+      }
+      dispatchSimpleEvent(el, win, "blur");
+      dispatchSimpleEvent(el, win, "focusout");
       return true;
     }
     return false;
@@ -766,16 +1088,61 @@
     return domBase ? domBase.findTopDialog(doc) : doc.querySelector('[role="dialog"], [aria-modal="true"]');
   }
 
+  function matchesUploadImageLabel(el) {
+    if (!el) return false;
+    if (el.getAttribute && el.getAttribute("role") === "heading") return false;
+    const lbl = normalize((el.innerText || el.textContent || "") + " " + (el.getAttribute("aria-label") || ""));
+    return UPLOAD_IMAGE_TAB_LABELS.some((kw) => lbl === kw || lbl.includes(kw));
+  }
+
   function findUploadImageTabInModal(modal, doc) {
     if (!modal) return null;
     const candidates = Array.from(
       modal.querySelectorAll('button, [role="button"], [role="tab"], [role="radio"]')
-    ).filter((el) => isVisible(el, doc));
+    ).filter((el) => isVisible(el, doc) && matchesUploadImageLabel(el));
 
-    for (const el of candidates) {
-      const lbl = normalize(el.innerText || el.textContent || "");
-      if (UPLOAD_IMAGE_TAB_LABELS.some((kw) => lbl === kw || lbl.includes(kw))) {
-        return el;
+    // Prefer segmented tab inside [role="group"] or with aria-pressed/aria-selected
+    const segmented = candidates.find((el) =>
+      (typeof el.closest === "function" && el.closest('[role="group"]')) ||
+      el.hasAttribute("aria-pressed") ||
+      el.hasAttribute("aria-selected") ||
+      el.getAttribute("role") === "tab" ||
+      el.getAttribute("role") === "radio"
+    );
+    return segmented || candidates[0] || null;
+  }
+
+  function findUploadImageTriggerInModal(modal, doc) {
+    if (!modal) return null;
+    // 1. Prefer inner <a> / [role="link"] ("Unggah gambar" link inside the dropzone card)
+    const links = Array.from(
+      modal.querySelectorAll('a, [role="link"]')
+    ).filter((el) => isVisible(el, doc) && matchesUploadImageLabel(el));
+    if (links.length > 0) return links[0];
+
+    // 2. Fallback: secondary upload button outside the segmented tab [role="group"]
+    const buttons = Array.from(
+      modal.querySelectorAll('button, [role="button"]')
+    ).filter((el) =>
+      isVisible(el, doc) &&
+      matchesUploadImageLabel(el) &&
+      !(typeof el.closest === "function" && el.closest('[role="group"]')) &&
+      el.getAttribute("role") !== "tab" &&
+      el.getAttribute("role") !== "radio"
+    );
+    return buttons[0] || null;
+  }
+
+  function findCancelModalButton(modal, doc) {
+    if (!modal) return null;
+    const cancelLabels = ["cancel", "batal", "close", "tutup"];
+    const buttons = Array.from(modal.querySelectorAll('button, [role="button"]')).filter((el) =>
+      isVisible(el, doc) && !el.disabled && el.getAttribute("aria-disabled") !== "true"
+    );
+    for (const btn of buttons) {
+      const lbl = normalize((btn.innerText || btn.textContent || "") + " " + (btn.getAttribute("aria-label") || ""));
+      if (cancelLabels.some((kw) => lbl === kw)) {
+        return btn;
       }
     }
     return null;
@@ -863,6 +1230,12 @@
     focusDescriptionField,
     isMetaErrorPage,
     isIndonesianPopover,
+    readSpinbuttonNumber,
+    focusScheduleField,
+    dispatchKeyEvent,
+    setInputViaNativeSetter,
+    typeDigitsIntoSpinbutton,
+    stepSpinbuttonWithArrows,
     commitScheduleInput,
     setNativeInputValue,
     findComposerRows,
@@ -874,6 +1247,8 @@
     setScheduleInputsInPopover,
     findActiveModal,
     findUploadImageTabInModal,
+    findUploadImageTriggerInModal,
+    findCancelModalButton,
     findImageFileInputInModal,
     attachFileToInput,
     findModalAdvanceButton,

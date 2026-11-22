@@ -44,6 +44,16 @@
         "src/content.js"
       ],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://business.facebook.com/*"
+      ],
+      "js": [
+        "src/cover-bridge.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_idle"
     }
   ]
 }
